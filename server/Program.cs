@@ -123,15 +123,7 @@ app.MapGet("/api/screenshot", async () =>
 // 稼働中のアクティブアプリ一覧取得 API (対話型セッション内で実行)
 app.MapGet("/api/activeapp", async () =>
 {
-    string script = "$csv = tasklist /v /fo csv | ConvertFrom-Csv; " +
-                   "$titles = foreach ($row in $csv) { " +
-                       "$props = $row.PSObject.Properties | Select-Object -ExpandProperty Name; " +
-                       "if ($props.Count -ge 9) { " +
-                           "$win = $row.($props[8]); " +
-                           "if ($win -and $win -ne 'N/A' -and $win -ne 'クラスなし') { $win } " +
-                       "} " +
-                   "}; " +
-                   "if ($titles) { $titles -join ', ' } else { '' }";
+    string script = "(Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object -ExpandProperty MainWindowTitle) -join ', '";
     byte[]? bytes = await ExecutePowerShellInUserSessionAsync(script, "txt");
     string result = bytes != null ? System.Text.Encoding.UTF8.GetString(bytes).Trim() : string.Empty;
     return Results.Ok(new { ActiveApp = result });
@@ -140,21 +132,7 @@ app.MapGet("/api/activeapp", async () =>
 // プロセス一覧取得 API (対話型セッション内で実行)
 app.MapGet("/api/processes", async () =>
 {
-    string script = "$csv = tasklist /v /fo csv | ConvertFrom-Csv; " +
-                   "$res = foreach ($row in $csv) { " +
-                       "$props = $row.PSObject.Properties | Select-Object -ExpandProperty Name; " +
-                       "if ($props.Count -ge 9) { " +
-                           "$win = $row.($props[8]); " +
-                           "if ($win -and $win -ne 'N/A' -and $win -ne 'クラスなし') { " +
-                               "[PSCustomObject]@{ " +
-                                   "ProcessName = $row.($props[0]); " +
-                                   "Id = [int]$row.($props[1]); " +
-                                   "MainWindowTitle = $win " +
-                               "} " +
-                           "} " +
-                       "} " +
-                   "}; " +
-                   "if ($res) { ConvertTo-Json @($res) -Compress } else { '[]' }";
+    string script = "$p = Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object ProcessName, Id, MainWindowTitle; if ($p) { ConvertTo-Json @($p) -Compress } else { '[]' }";
     byte[]? bytes = await ExecutePowerShellInUserSessionAsync(script, "txt");
     string result = bytes != null ? System.Text.Encoding.UTF8.GetString(bytes).Trim() : "[]";
     if (string.IsNullOrEmpty(result))
