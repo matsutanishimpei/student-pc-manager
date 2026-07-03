@@ -44,38 +44,23 @@ namespace client
 
             try
             {
-                string command = "$p = Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object ProcessName, Id, MainWindowTitle; if ($p) { ConvertTo-Json @($p) -Compress } else { \"[]\" }";
-                
-                var reqObj = new CommandRequest { Command = command };
-                var request = new HttpRequestMessage(HttpMethod.Post, $"http://{_pcAddress}/api/exec")
-                {
-                    Content = JsonContent.Create(reqObj)
-                };
+                var request = new HttpRequestMessage(HttpMethod.Get, $"http://{_pcAddress}/api/processes");
                 request.Headers.Add("X-API-KEY", _apiKey);
 
                 var response = await httpClient.SendAsync(request);
                 if (response.IsSuccessStatusCode)
                 {
-                    var cmdResult = await response.Content.ReadFromJsonAsync<CommandResponse>();
-                    if (cmdResult != null && cmdResult.ExitCode == 0)
+                    var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                    var processes = await response.Content.ReadFromJsonAsync<List<ProcessInfo>>(options);
+                    
+                    Dispatcher.Invoke(() =>
                     {
-                        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                        var processes = JsonSerializer.Deserialize<List<ProcessInfo>>(cmdResult.Stdout, options);
-                        
-                        Dispatcher.Invoke(() =>
-                        {
-                            ProcessListView.ItemsSource = processes;
-                            StatusTextBlock.Text = $"取得完了: {processes?.Count ?? 0} 個のプロセスが実行中";
-                        });
-                    }
-                    else
-                    {
-                        Dispatcher.Invoke(() => StatusTextBlock.Text = $"取得失敗。エラー: {cmdResult?.Stderr}");
-                    }
+                        ProcessListView.ItemsSource = processes;
+                        StatusTextBlock.Text = $"取得完了: {processes?.Count ?? 0} 個のプロセスが実行中";
+                    });
                 }
                 else
                 {
-                    string err = await response.Content.ReadAsStringAsync();
                     Dispatcher.Invoke(() => StatusTextBlock.Text = $"通信エラー: HTTP {response.StatusCode}");
                 }
             }
