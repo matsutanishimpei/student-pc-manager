@@ -14,6 +14,8 @@ Write-Host "`n[1/2] サーバー (生徒用 Windows サービス) をビルド�
 dotnet publish server/server.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=true -o "$PublishDir/server"
 
 if ($LASTEXITCODE -eq 0) {
+    Copy-Item "server/install.bat" "$PublishDir/server/" -Force
+    Copy-Item "server/uninstall.bat" "$PublishDir/server/" -Force
     Write-Host "✓ サーバービルド成功: $PublishDir\server\server.exe" -ForegroundColor Green
 } else {
     Write-Error "サーバーのビルドに失敗しました。"
