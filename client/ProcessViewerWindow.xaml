@@ -1,7 +1,7 @@
 <Window x:Class="client.ProcessViewerWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="プロセス詳細監視" Height="500" Width="650"
+        Title="プロセス詳細・画面キャプチャ監視" Height="550" Width="1100"
         Background="#18181B" FontFamily="Segoe UI, Yu Gothic" TextElement.Foreground="#F4F4F5"
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
     
@@ -90,26 +90,67 @@
                 <TextBlock Text="対象PC: " FontSize="16" FontWeight="Bold" Foreground="#A1A1AA"/>
                 <TextBlock x:Name="TargetPcTextBlock" Text="Loading..." FontSize="16" FontWeight="Bold" Foreground="#F4F4F5"/>
             </StackPanel>
-            <Button Grid.Column="1" Content="更新" Click="RefreshButton_Click"/>
+            <Button Grid.Column="1" Content="プロセス更新" Click="RefreshButton_Click"/>
         </Grid>
 
-        <!-- Process DataGrid/ListView -->
-        <ListView x:Name="ProcessListView" Grid.Row="1" Margin="0,0,0,12">
-            <ListView.View>
-                <GridView>
-                    <GridViewColumn Header="PID" DisplayMemberBinding="{Binding Id}" Width="80"/>
-                    <GridViewColumn Header="プロセス名" DisplayMemberBinding="{Binding ProcessName}" Width="150"/>
-                    <GridViewColumn Header="ウィンドウタイトル" DisplayMemberBinding="{Binding MainWindowTitle}" Width="280"/>
-                    <GridViewColumn Header="操作" Width="80">
-                        <GridViewColumn.CellTemplate>
-                            <DataTemplate>
-                                <Button Content="強制終了" Background="#EF4444" FontSize="11" Padding="6,2" Click="KillProcessButton_Click" Tag="{Binding Id}"/>
-                            </DataTemplate>
-                        </GridViewColumn.CellTemplate>
-                    </GridViewColumn>
-                </GridView>
-            </ListView.View>
-        </ListView>
+        <!-- Split Grid for processes and screenshot -->
+        <Grid Grid.Row="1" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="3*"/>
+                <ColumnDefinition Width="10"/>
+                <ColumnDefinition Width="2*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- LEFT: Process ListView -->
+            <ListView x:Name="ProcessListView" Grid.Column="0">
+                <ListView.View>
+                    <GridView>
+                        <GridViewColumn Header="PID" DisplayMemberBinding="{Binding Id}" Width="80"/>
+                        <GridViewColumn Header="プロセス名" DisplayMemberBinding="{Binding ProcessName}" Width="150"/>
+                        <GridViewColumn Header="ウィンドウタイトル" DisplayMemberBinding="{Binding MainWindowTitle}" Width="280"/>
+                        <GridViewColumn Header="操作" Width="80">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <Button Content="強制終了" Background="#EF4444" FontSize="11" Padding="6,2" Click="KillProcessButton_Click" Tag="{Binding Id}"/>
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                    </GridView>
+                </ListView.View>
+            </ListView>
+
+            <!-- Splitter -->
+            <GridSplitter Grid.Column="1" Width="2" HorizontalAlignment="Center" VerticalAlignment="Stretch" Background="#27272A" Margin="4,0"/>
+
+            <!-- RIGHT: Screen Capture Viewer -->
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- Screenshot Image -->
+                <Border Grid.Row="0" Background="#121214" BorderBrush="#27272A" BorderThickness="1" CornerRadius="4" Margin="0,0,0,10">
+                    <Grid>
+                        <!-- Image Viewer -->
+                        <Image x:Name="ScreenshotImage" Stretch="Uniform" Margin="5"/>
+                        <!-- Center status placeholder -->
+                        <TextBlock x:Name="ImageStatusTextBlock" Text="キャプチャ未取得" VerticalAlignment="Center" HorizontalAlignment="Center" Foreground="#71717A" FontSize="14"/>
+                    </Grid>
+                </Border>
+
+                <!-- Screenshot Actions -->
+                <Grid Grid.Row="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="8"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Content="画面キャプチャ取得" Click="CaptureButton_Click"/>
+                    <Button Grid.Column="2" Content="保存..." Style="{StaticResource SecondaryButton}" Click="SaveImageButton_Click" x:Name="SaveImageButton" IsEnabled="False"/>
+                </Grid>
+            </Grid>
+        </Grid>
 
         <!-- Bottom status bar -->
         <TextBlock x:Name="StatusTextBlock" Grid.Row="2" Text="読み込み中..." Foreground="#A1A1AA" FontSize="12"/>

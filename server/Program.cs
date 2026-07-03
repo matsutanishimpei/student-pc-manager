@@ -101,6 +101,64 @@ app.MapPost("/api/upload", async (HttpRequest request) =>
     }
 });
 
+// 画面キャプチャ取得 API (Session 0 隔離対策としてスケジュールタスク経由で対話型セッションにて実行)
+app.MapGet("/api/screenshot", async () =>
+{
+    string taskId = "sendCMD_SS_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+    string tempFile = Path.Combine(Path.GetTempPath(), taskId + ".png");
+    
+    // PowerShellコマンドの構成 (System.Windows.Forms & System.Drawing を使用してプライマリスクリーンを保存)
+    string psCommand = "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; " +
+                       "$s = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; " +
+                       "$b = New-Object System.Drawing.Bitmap $s.Width, $s.Height; " +
+                       "$g = [System.Drawing.Graphics]::FromImage($b); " +
+                       "$g.CopyFromScreen($s.X, $s.Y, 0, 0, $b.Size); " +
+                       $"$b.Save('{tempFile.Replace("\\", "\\\\")}', [System.Drawing.Imaging.ImageFormat]::Png); " +
+                       "$g.Dispose(); $b.Dispose();";
+
+    try
+    {
+        // 1. スケジュールタスクの作成 (現在の対話型ユーザー権限 /ru INTERACTIVE で実行するように指定)
+        string createArgs = $"/create /tn \"{taskId}\" /tr \"powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command \\\"{psCommand}\\\"\" /sc ONCE /st 00:00 /ru INTERACTIVE /f";
+        ExecuteCommand("schtasks.exe", createArgs);
+
+        // 2. タスクの実行
+        string runArgs = $"/run /tn \"{taskId}\"";
+        ExecuteCommand("schtasks.exe", runArgs);
+
+        // 3. ファイルの生成待ち (最大3秒)
+        bool fileCreated = false;
+        for (int i = 0; i < 15; i++)
+        {
+            if (File.Exists(tempFile))
+            {
+                fileCreated = true;
+                break;
+            }
+            await Task.Delay(200);
+        }
+
+        // 4. スケジュールタスクの強制削除
+        string deleteArgs = $"/delete /tn \"{taskId}\" /f";
+        ExecuteCommand("schtasks.exe", deleteArgs);
+
+        if (!fileCreated)
+        {
+            return Results.StatusCode(504); // Gateway Timeout (ユーザーがログインしていない等)
+        }
+
+        // 5. 画像データの読み込みとファイル削除
+        byte[] imageBytes = await File.ReadAllBytesAsync(tempFile);
+        try { File.Delete(tempFile); } catch {}
+
+        return Results.File(imageBytes, "image/png");
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.Message);
+    }
+});
+
 app.Run();
 
 // PowerShell コマンド実行ヘルパー
@@ -144,4 +202,20 @@ static CommandResponse ExecutePowerShell(string command)
         result.Stderr = ex.Message;
     }
     return result;
+}
+
+// 外部コマンド実行用ヘルパー (schtasks.exe等)
+static void ExecuteCommand(string fileName, string arguments)
+{
+    try
+    {
+        using var process = new Process();
+        process.StartInfo.FileName = fileName;
+        process.StartInfo.Arguments = arguments;
+        process.StartInfo.UseShellExecute = false;
+        process.StartInfo.CreateNoWindow = true;
+        process.Start();
+        process.WaitForExit();
+    }
+    catch {}
 }

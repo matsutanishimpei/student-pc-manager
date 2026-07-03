@@ -1,12 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media.Imaging;
 using Share.Models;
 using System.Text.Json;
+using Microsoft.Win32;
 
 namespace client
 {
@@ -14,7 +17,8 @@ namespace client
     {
         private readonly string _pcAddress;
         private readonly string _apiKey;
-        private static readonly HttpClient httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        private byte[]? _currentImageBytes;
+        private static readonly HttpClient httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
 
         public ProcessViewerWindow(string pcAddress, string apiKey)
         {
@@ -23,7 +27,11 @@ namespace client
             _apiKey = apiKey;
             TargetPcTextBlock.Text = _pcAddress;
             
-            Loaded += async (s, e) => await LoadProcessesAsync();
+            Loaded += async (s, e) => {
+                await LoadProcessesAsync();
+                // 起動時に自動で1回キャプチャも取得する
+                await CaptureScreenAsync();
+            };
         }
 
         private async Task LoadProcessesAsync()
@@ -36,7 +44,6 @@ namespace client
 
             try
             {
-                // ウィンドウタイトルを持つプロセスのみを取得するPowerShellコマンド
                 string command = "$p = Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object ProcessName, Id, MainWindowTitle; if ($p) { ConvertTo-Json @($p) -Compress } else { \"[]\" }";
                 
                 var reqObj = new CommandRequest { Command = command };
@@ -82,9 +89,100 @@ namespace client
             }
         }
 
+        private async Task CaptureScreenAsync()
+        {
+            Dispatcher.Invoke(() =>
+            {
+                ImageStatusTextBlock.Text = "キャプチャ取得中...";
+                ImageStatusTextBlock.Visibility = Visibility.Visible;
+                ScreenshotImage.Source = null;
+                SaveImageButton.IsEnabled = false;
+            });
+
+            try
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, $"http://{_pcAddress}/api/screenshot");
+                request.Headers.Add("X-API-KEY", _apiKey);
+
+                var response = await httpClient.SendAsync(request);
+                if (response.IsSuccessStatusCode)
+                {
+                    byte[] imageBytes = await response.Content.ReadAsByteArrayAsync();
+                    _currentImageBytes = imageBytes;
+
+                    var bitmap = new BitmapImage();
+                    using (var ms = new MemoryStream(imageBytes))
+                    {
+                        bitmap.BeginInit();
+                        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                        bitmap.StreamSource = ms;
+                        bitmap.EndInit();
+                    }
+                    bitmap.Freeze();
+
+                    Dispatcher.Invoke(() =>
+                    {
+                        ScreenshotImage.Source = bitmap;
+                        ImageStatusTextBlock.Visibility = Visibility.Collapsed;
+                        SaveImageButton.IsEnabled = true;
+                    });
+                }
+                else if (response.StatusCode == System.Net.HttpStatusCode.GatewayTimeout)
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        ImageStatusTextBlock.Text = "失敗 (ログインユーザー不在 / ロック画面)";
+                    });
+                }
+                else
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        ImageStatusTextBlock.Text = $"取得失敗 (HTTP {response.StatusCode})";
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    ImageStatusTextBlock.Text = $"エラー: {ex.Message}";
+                });
+            }
+        }
+
         private async void RefreshButton_Click(object sender, RoutedEventArgs e)
         {
             await LoadProcessesAsync();
+        }
+
+        private async void CaptureButton_Click(object sender, RoutedEventArgs e)
+        {
+            await CaptureScreenAsync();
+        }
+
+        private void SaveImageButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_currentImageBytes == null) return;
+
+            var saveFileDialog = new SaveFileDialog
+            {
+                Filter = "PNG画像 (*.png)|*.png",
+                FileName = $"{_pcAddress.Replace(":", "_")}_screenshot.png"
+            };
+
+            if (saveFileDialog.ShowDialog() == true)
+            {
+                try
+                {
+                    File.WriteAllBytes(saveFileDialog.FileName, _currentImageBytes);
+                    MessageBox.Show("画像を保存しました。", "成功", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"保存エラー: {ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
         }
 
         private async void KillProcessButton_Click(object sender, RoutedEventArgs e)
@@ -114,7 +212,7 @@ namespace client
                         if (cmdResult != null && cmdResult.ExitCode == 0)
                         {
                             MessageBox.Show("プロセスを終了しました。", "成功", MessageBoxButton.OK, MessageBoxImage.Information);
-                            await LoadProcessesAsync(); // リストを更新
+                            await LoadProcessesAsync();
                         }
                         else
                         {
@@ -130,9 +228,9 @@ namespace client
                 {
                     MessageBox.Show($"エラー: {ex.Message}", "例外発生", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
-            }
         }
     }
+}
 
     public class ProcessInfo
     {
