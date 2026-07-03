@@ -217,7 +217,7 @@ static async Task<byte[]?> ExecutePowerShellInUserSessionAsync(string psCommand,
     }
     else
     {
-        fullScriptContent = $"$r = {psCommand}; Out-File -FilePath '{outputFile}' -InputObject $r -Encoding utf8";
+        fullScriptContent = $"$r = $({psCommand}); Out-File -FilePath '{outputFile}' -InputObject $r -Encoding utf8";
     }
 
     try
