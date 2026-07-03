@@ -104,59 +104,42 @@ app.MapPost("/api/upload", async (HttpRequest request) =>
 // 画面キャプチャ取得 API (Session 0 隔離対策としてスケジュールタスク経由で対話型セッションにて実行)
 app.MapGet("/api/screenshot", async () =>
 {
-    string taskId = "sendCMD_SS_" + Guid.NewGuid().ToString("N").Substring(0, 8);
-    string tempFile = Path.Combine(Path.GetTempPath(), taskId + ".png");
-    
-    // PowerShellコマンドの構成 (System.Windows.Forms & System.Drawing を使用してプライマリスクリーンを保存)
     string psCommand = "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; " +
                        "$s = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; " +
                        "$b = New-Object System.Drawing.Bitmap $s.Width, $s.Height; " +
                        "$g = [System.Drawing.Graphics]::FromImage($b); " +
                        "$g.CopyFromScreen($s.X, $s.Y, 0, 0, $b.Size); " +
-                       $"$b.Save('{tempFile.Replace("\\", "\\\\")}', [System.Drawing.Imaging.ImageFormat]::Png); " +
+                       "$b.Save('{OUT_FILE}', [System.Drawing.Imaging.ImageFormat]::Png); " +
                        "$g.Dispose(); $b.Dispose();";
 
-    try
+    byte[]? imageBytes = await ExecutePowerShellInUserSessionAsync(psCommand, "png");
+    if (imageBytes == null)
     {
-        // 1. スケジュールタスクの作成 (現在の対話型ユーザー権限 /ru INTERACTIVE で実行するように指定)
-        string createArgs = $"/create /tn \"{taskId}\" /tr \"powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command \\\"{psCommand}\\\"\" /sc ONCE /st 00:00 /ru INTERACTIVE /f";
-        ExecuteCommand("schtasks.exe", createArgs);
-
-        // 2. タスクの実行
-        string runArgs = $"/run /tn \"{taskId}\"";
-        ExecuteCommand("schtasks.exe", runArgs);
-
-        // 3. ファイルの生成待ち (最大3秒)
-        bool fileCreated = false;
-        for (int i = 0; i < 15; i++)
-        {
-            if (File.Exists(tempFile))
-            {
-                fileCreated = true;
-                break;
-            }
-            await Task.Delay(200);
-        }
-
-        // 4. スケジュールタスクの強制削除
-        string deleteArgs = $"/delete /tn \"{taskId}\" /f";
-        ExecuteCommand("schtasks.exe", deleteArgs);
-
-        if (!fileCreated)
-        {
-            return Results.StatusCode(504); // Gateway Timeout (ユーザーがログインしていない等)
-        }
-
-        // 5. 画像データの読み込みとファイル削除
-        byte[] imageBytes = await File.ReadAllBytesAsync(tempFile);
-        try { File.Delete(tempFile); } catch {}
-
-        return Results.File(imageBytes, "image/png");
+        return Results.StatusCode(504); // Gateway Timeout (ユーザーがログインしていない等)
     }
-    catch (Exception ex)
+    return Results.File(imageBytes, "image/png");
+});
+
+// 稼働中のアクティブアプリ一覧取得 API (対話型セッション内で実行)
+app.MapGet("/api/activeapp", async () =>
+{
+    string script = "(Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object -ExpandProperty MainWindowTitle) -join ', '";
+    byte[]? bytes = await ExecutePowerShellInUserSessionAsync(script, "txt");
+    string result = bytes != null ? System.Text.Encoding.UTF8.GetString(bytes).Trim() : string.Empty;
+    return Results.Ok(new { ActiveApp = result });
+});
+
+// プロセス一覧取得 API (対話型セッション内で実行)
+app.MapGet("/api/processes", async () =>
+{
+    string script = "$p = Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object ProcessName, Id, MainWindowTitle; if ($p) { ConvertTo-Json @($p) -Compress } else { '[]' }";
+    byte[]? bytes = await ExecutePowerShellInUserSessionAsync(script, "txt");
+    string result = bytes != null ? System.Text.Encoding.UTF8.GetString(bytes).Trim() : "[]";
+    if (string.IsNullOrEmpty(result))
     {
-        return Results.Problem(ex.Message);
+        result = "[]";
     }
+    return Results.Content(result, "application/json");
 });
 
 app.Run();
@@ -218,4 +201,65 @@ static void ExecuteCommand(string fileName, string arguments)
         process.WaitForExit();
     }
     catch {}
+}
+
+// 対話型ユーザーのコンソールセッション内でPowerShellスクリプトを実行するヘルパー (スクリプトファイル生成方式)
+static async Task<byte[]?> ExecutePowerShellInUserSessionAsync(string psCommand, string fileExtension)
+{
+    string taskId = "sendCMD_US_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+    string scriptFile = Path.Combine("C:\\Users\\Public", taskId + ".ps1");
+    string outputFile = Path.Combine("C:\\Users\\Public", taskId + "." + fileExtension);
+    
+    string fullScriptContent;
+    if (fileExtension == "png")
+    {
+        fullScriptContent = psCommand.Replace("{OUT_FILE}", outputFile.Replace("\\", "\\\\"));
+    }
+    else
+    {
+        fullScriptContent = $"$r = {psCommand}; Out-File -FilePath '{outputFile}' -InputObject $r -Encoding utf8";
+    }
+
+    try
+    {
+        // 1. スクリプトファイルを書き込み (UTF-8)
+        await File.WriteAllTextAsync(scriptFile, fullScriptContent, System.Text.Encoding.UTF8);
+
+        // 2. スケジュールタスクの作成 (引数エスケープの問題を避けるため、ファイルを指定して実行)
+        string createArgs = $"/create /tn \"{taskId}\" /tr \"powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File \\\"{scriptFile}\\\"\" /sc ONCE /st 00:00 /ru INTERACTIVE /f";
+        ExecuteCommand("schtasks.exe", createArgs);
+
+        // 3. タスクの実行
+        ExecuteCommand("schtasks.exe", $"/run /tn \"{taskId}\"");
+
+        // 4. 出力ファイルの生成待ち (最大4秒)
+        bool fileCreated = false;
+        for (int i = 0; i < 20; i++)
+        {
+            if (File.Exists(outputFile))
+            {
+                fileCreated = true;
+                break;
+            }
+            await Task.Delay(200);
+        }
+
+        // 5. クリーンアップ
+        ExecuteCommand("schtasks.exe", $"/delete /tn \"{taskId}\" /f");
+        try { File.Delete(scriptFile); } catch {}
+
+        if (!fileCreated)
+        {
+            return null;
+        }
+
+        // 6. 出力データの読み込みとファイル削除
+        byte[] resultBytes = await File.ReadAllBytesAsync(outputFile);
+        try { File.Delete(outputFile); } catch {}
+        return resultBytes;
+    }
+    catch
+    {
+        return null;
+    }
 }

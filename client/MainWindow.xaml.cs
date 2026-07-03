@@ -403,43 +403,25 @@ namespace client
                 {
                     try
                     {
-                        // アクティブウィンドウタイトルをカンマ区切りの文字列で取得するPowerShellコマンド
-                        string command = "(Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object -ExpandProperty MainWindowTitle) -join ', '";
-                        var reqObj = new CommandRequest { Command = command };
-                        var request = new HttpRequestMessage(HttpMethod.Post, $"http://{target.IpAddress}/api/exec")
-                        {
-                            Content = JsonContent.Create(reqObj)
-                        };
+                        var request = new HttpRequestMessage(HttpMethod.Get, $"http://{target.IpAddress}/api/activeapp");
                         request.Headers.Add("X-API-KEY", apiKey);
 
                         var response = await httpClient.SendAsync(request);
                         if (response.IsSuccessStatusCode)
                         {
-                            var result = await response.Content.ReadFromJsonAsync<CommandResponse>();
-                            if (result != null && result.ExitCode == 0)
+                            var result = await response.Content.ReadFromJsonAsync<ActiveAppResponse>();
+                            string activeApp = result?.ActiveApp ?? "";
+                            if (string.IsNullOrEmpty(activeApp))
                             {
-                                string activeApp = result.Stdout.Trim();
-                                if (string.IsNullOrEmpty(activeApp))
-                                {
-                                    activeApp = "(アクティブウィンドウなし / アイドル)";
-                                }
+                                activeApp = "(アクティブウィンドウなし / アイドル)";
+                            }
 
-                                Dispatcher.Invoke(() =>
-                                {
-                                    item.Status = "オンライン";
-                                    item.StatusColor = System.Windows.Media.Brushes.Green;
-                                    item.ActiveApp = activeApp;
-                                });
-                            }
-                            else
+                            Dispatcher.Invoke(() =>
                             {
-                                Dispatcher.Invoke(() =>
-                                {
-                                    item.Status = "エラー";
-                                    item.StatusColor = System.Windows.Media.Brushes.Red;
-                                    item.ActiveApp = result?.Stderr ?? "コマンド実行エラー";
-                                });
-                            }
+                                item.Status = "オンライン";
+                                item.StatusColor = System.Windows.Media.Brushes.Green;
+                                item.ActiveApp = activeApp;
+                            });
                         }
                         else
                         {
@@ -549,5 +531,10 @@ namespace client
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
         }
+    }
+
+    public class ActiveAppResponse
+    {
+        public string ActiveApp { get; set; } = string.Empty;
     }
 }
