@@ -23,6 +23,8 @@ namespace client
         public ObservableCollection<MonitorItem> MonitorList { get; set; } = new ObservableCollection<MonitorItem>();
         private System.Windows.Threading.DispatcherTimer? _monitorTimer;
 
+        private static readonly string ConfigFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
+
         public MainWindow()
         {
             InitializeComponent();
@@ -31,6 +33,7 @@ namespace client
             MonitorListBox.ItemsSource = MonitorList;
             InitializeMonitorTimer();
             this.Closed += Window_Closed;
+            LoadConfig();
             Log("sendCMD コンソールが初期化されました。");
         }
 
@@ -717,6 +720,52 @@ namespace client
             client.EnableBroadcast = true;
             await client.SendAsync(packet, packet.Length, new System.Net.IPEndPoint(System.Net.IPAddress.Broadcast, 9));
         }
+
+        private void LoadConfig()
+        {
+            try
+            {
+                if (File.Exists(ConfigFilePath))
+                {
+                    string json = File.ReadAllText(ConfigFilePath);
+                    var config = System.Text.Json.JsonSerializer.Deserialize<ClientConfig>(json);
+                    if (config != null && !string.IsNullOrEmpty(config.ApiKey))
+                    {
+                        ApiKeyTextBox.Text = config.ApiKey;
+                    }
+                }
+                else
+                {
+                    SaveConfig();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"設定ファイルの読み込み中にエラーが発生しました: {ex.Message}");
+            }
+        }
+
+        private void SaveConfig()
+        {
+            try
+            {
+                var config = new ClientConfig
+                {
+                    ApiKey = ApiKeyTextBox?.Text ?? "5c3e7f41-0f73-455b-b9d9-482470724653"
+                };
+                string json = System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(ConfigFilePath, json);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"設定ファイルの保存中にエラーが発生しました: {ex.Message}");
+            }
+        }
+
+        private void ApiKeyTextBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+        {
+            SaveConfig();
+        }
     }
 
     public class PcItem : INotifyPropertyChanged
@@ -837,5 +886,10 @@ namespace client
     public class ActiveAppResponse
     {
         public string ActiveApp { get; set; } = string.Empty;
+    }
+
+    public class ClientConfig
+    {
+        public string ApiKey { get; set; } = "5c3e7f41-0f73-455b-b9d9-482470724653";
     }
 }
