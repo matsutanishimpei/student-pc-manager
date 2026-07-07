@@ -48,6 +48,40 @@ d:\dev\sendCMD\
     ```
 3.  ビルドに成功すると、ルート直下に `publish` フォルダが作成され、中に .NET ランタイム不要の独立した `.exe` ファイルが出力されます。
 
+### 🛈 サイレント（対話なし）インストール・アンインストール
+
+実習室の複数の生徒PCへ一斉にインストール・アンインストールを行いたい場合（Active Directoryのスタートアップスクリプトや資産管理ソフト等のパッケージ配布など）、以下のコマンドを管理者権限のコマンドプロンプトやPowerShell等から実行することで、裏で対話なしで処理を完了できます。
+
+#### ① サイレントインストール
+`server.exe` と `appsettings.json` が配置されたフォルダで以下を管理者権限で実行します：
+```cmd
+:: インストール先フォルダの作成とファイルコピー
+mkdir "C:\Program Files\sendCMD"
+copy /y server.exe "C:\Program Files\sendCMD\"
+copy /y appsettings.json "C:\Program Files\sendCMD\"
+
+:: ファイアウォール許可ルールの追加 (TCP 5000ポート)
+powershell -Command "New-NetFirewallRule -Name 'sendCMD' -DisplayName 'sendCMD Server' -Direction Inbound -Protocol TCP -LocalPort 5000 -Action Allow -ErrorAction SilentlyContinue"
+
+:: Windowsサービスへの登録と起動
+sc.exe create sendCMD binPath= "\"C:\Program Files\sendCMD\server.exe\"" start= auto
+sc.exe start sendCMD
+```
+
+#### ② サイレントアンインストール
+生徒PCからサービスとファイルを完全に削除したい場合は、以下を管理者権限で実行します：
+```cmd
+:: サービスの停止と削除
+sc.exe stop sendCMD
+sc.exe delete sendCMD
+
+:: ファイアウォール許可ルールの削除
+powershell -Command "Remove-NetFirewallRule -Name 'sendCMD' -ErrorAction SilentlyContinue"
+
+:: ファイルの強制削除
+rmdir /s /q "C:\Program Files\sendCMD"
+```
+
 ---
 
 ## 3. 各マニュアルへのリンク

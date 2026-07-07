@@ -142,6 +142,9 @@ app.MapGet("/api/processes", async () =>
     return Results.Content(result, "application/json");
 });
 
+// PC情報取得API
+app.MapGet("/api/info", () => Results.Ok(new ServerInfoResponse { MachineName = Environment.MachineName }));
+
 app.Run();
 
 // PowerShell コマンド実行ヘルパー

@@ -13,4 +13,9 @@ namespace Share.Models
         public string Stdout { get; set; } = string.Empty;
         public string Stderr { get; set; } = string.Empty;
     }
+
+    public class ServerInfoResponse
+    {
+        public string MachineName { get; set; } = string.Empty;
+    }
 }

@@ -464,23 +464,110 @@ namespace client
                 viewer.ShowDialog();
             }
         }
+
+        private void IpScanButton_Click(object sender, RoutedEventArgs e)
+        {
+            string apiKey = ApiKeyTextBox.Text;
+            var scanner = new IpScannerWindow(apiKey, httpClient)
+            {
+                Owner = this
+            };
+
+            if (scanner.ShowDialog() == true)
+            {
+                int count = 0;
+                bool regByName = scanner.RegByNameRadio.IsChecked == true;
+                string portText = scanner.PortTextBox.Text.Trim();
+
+                foreach (var item in scanner.SelectedItems)
+                {
+                    string hostString;
+                    string machineName = string.Empty;
+
+                    if (regByName && !string.IsNullOrEmpty(item.MachineName) && item.MachineName != "(認証エラー)")
+                    {
+                        hostString = $"{item.MachineName}:{portText}";
+                        machineName = item.MachineName;
+                    }
+                    else
+                    {
+                        hostString = item.IpAddress; // "ip:port" 形式
+                        if (!string.IsNullOrEmpty(item.MachineName) && item.MachineName != "(名前解決不可)" && item.MachineName != "(認証エラー)")
+                        {
+                            machineName = item.MachineName;
+                        }
+                    }
+
+                    if (!PcList.Any(p => p.IpAddress.Equals(hostString, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        PcList.Add(new PcItem 
+                        { 
+                            IpAddress = hostString, 
+                            MachineName = machineName, 
+                            IsSelected = true 
+                        });
+                        count++;
+                    }
+                }
+
+                if (count > 0)
+                {
+                    Log($"スキャン登録完了: {count} 台のPCをリストに追加しました。");
+                    SavePcList();
+                }
+                else
+                {
+                    Log("スキャン登録完了: 新しく追加されたPCはありません (すべて登録済み)。");
+                }
+            }
+        }
     }
 
     public class PcItem : INotifyPropertyChanged
     {
         private string _ipAddress = string.Empty;
+        private string _machineName = string.Empty;
         private bool _isSelected = true;
 
         public string IpAddress
         {
             get => _ipAddress;
-            set { _ipAddress = value; OnPropertyChanged(); }
+            set 
+            { 
+                _ipAddress = value; 
+                OnPropertyChanged(); 
+                OnPropertyChanged(nameof(DisplayName)); 
+            }
+        }
+
+        public string MachineName
+        {
+            get => _machineName;
+            set 
+            { 
+                _machineName = value; 
+                OnPropertyChanged(); 
+                OnPropertyChanged(nameof(DisplayName)); 
+            }
         }
 
         public bool IsSelected
         {
             get => _isSelected;
             set { _isSelected = value; OnPropertyChanged(); }
+        }
+
+        [System.Text.Json.Serialization.JsonIgnore]
+        public string DisplayName
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(MachineName) || IpAddress.StartsWith(MachineName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return IpAddress;
+                }
+                return $"{IpAddress} ({MachineName})";
+            }
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
