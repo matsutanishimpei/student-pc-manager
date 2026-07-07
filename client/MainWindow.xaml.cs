@@ -21,14 +21,35 @@ namespace client
         private static readonly string PcsFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "pcs.json");
 
         public ObservableCollection<MonitorItem> MonitorList { get; set; } = new ObservableCollection<MonitorItem>();
+        private System.Windows.Threading.DispatcherTimer? _monitorTimer;
 
         public MainWindow()
         {
             InitializeComponent();
             PcList = LoadPcList();
             PcListBox.ItemsSource = PcList;
-            MonitorListView.ItemsSource = MonitorList;
+            MonitorListBox.ItemsSource = MonitorList;
+            InitializeMonitorTimer();
+            this.Closed += Window_Closed;
             Log("sendCMD コンソールが初期化されました。");
+        }
+
+        private void InitializeMonitorTimer()
+        {
+            _monitorTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(5)
+            };
+            _monitorTimer.Tick += MonitorTimer_Tick;
+        }
+
+        private void Window_Closed(object? sender, EventArgs e)
+        {
+            if (_monitorTimer != null)
+            {
+                _monitorTimer.Stop();
+                _monitorTimer = null;
+            }
         }
 
         private void Log(string message)
@@ -374,30 +395,65 @@ namespace client
             }
         }
 
+        private void MonitorTimer_Tick(object? sender, EventArgs e)
+        {
+            RefreshActiveApps(isAuto: true);
+        }
+
         private void GetActiveAppsButton_Click(object sender, RoutedEventArgs e)
+        {
+            RefreshActiveApps(isAuto: false);
+        }
+
+        private void RefreshActiveApps(bool isAuto)
         {
             var targets = PcList.Where(p => p.IsSelected).ToList();
             if (!targets.Any())
             {
-                Log("警告: 監視対象のPCが選択されていません。");
+                if (!isAuto)
+                {
+                    Log("警告: 稼働監視対象のPCが選択されていません。");
+                }
                 return;
             }
 
             string apiKey = ApiKeyTextBox.Text;
-            MonitorList.Clear();
 
-            Log($"{targets.Count} 台のPCでアクティブアプリ取得を開始します...");
+            // 1. 選択解除されたPCの監視項目を削除
+            var targetIps = targets.Select(t => t.IpAddress).ToHashSet();
+            for (int i = MonitorList.Count - 1; i >= 0; i--)
+            {
+                if (!targetIps.Contains(MonitorList[i].PcAddress))
+                {
+                    MonitorList.RemoveAt(i);
+                }
+            }
 
+            if (!isAuto)
+            {
+                Log($"{targets.Count} 台のPCでアクティブアプリ取得を開始します...");
+            }
+
+            // 2. 差分更新および新規追加
             foreach (var target in targets)
             {
-                var item = new MonitorItem
+                var item = MonitorList.FirstOrDefault(m => m.PcAddress == target.IpAddress);
+                if (item == null)
                 {
-                    PcAddress = target.IpAddress,
-                    Status = "取得中...",
-                    StatusColor = System.Windows.Media.Brushes.Yellow,
-                    ActiveApp = ""
-                };
-                MonitorList.Add(item);
+                    item = new MonitorItem
+                    {
+                        PcAddress = target.IpAddress,
+                        Status = "取得中...",
+                        StatusColor = System.Windows.Media.Brushes.Yellow,
+                        ActiveApp = ""
+                    };
+                    MonitorList.Add(item);
+                }
+                else if (!isAuto)
+                {
+                    item.Status = "取得中...";
+                    item.StatusColor = System.Windows.Media.Brushes.Yellow;
+                }
 
                 _ = Task.Run(async () =>
                 {
@@ -438,7 +494,7 @@ namespace client
                         Dispatcher.Invoke(() =>
                         {
                             item.Status = "オフライン";
-                            item.StatusColor = System.Windows.Media.Brushes.Red;
+                            item.StatusColor = System.Windows.Media.Brushes.Gray;
                             item.ActiveApp = ex.Message;
                         });
                     }
@@ -446,9 +502,28 @@ namespace client
             }
         }
 
-        private void MonitorListView_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        private void AutoMonitorCheckBox_Checked(object sender, RoutedEventArgs e)
         {
-            if (MonitorListView.SelectedItem is MonitorItem selectedItem)
+            if (_monitorTimer != null)
+            {
+                Log("自動監視を開始しました (5秒間隔)。");
+                RefreshActiveApps(isAuto: true);
+                _monitorTimer.Start();
+            }
+        }
+
+        private void AutoMonitorCheckBox_Unchecked(object sender, RoutedEventArgs e)
+        {
+            if (_monitorTimer != null)
+            {
+                _monitorTimer.Stop();
+                Log("自動監視を停止しました。");
+            }
+        }
+
+        private void MonitorListBox_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (MonitorListBox.SelectedItem is MonitorItem selectedItem)
             {
                 if (selectedItem.Status == "オフライン" || selectedItem.Status == "接続失敗")
                 {
