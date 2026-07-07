@@ -18,4 +18,9 @@ namespace Share.Models
     {
         public string MachineName { get; set; } = string.Empty;
     }
+
+    public class MacAddressResponse
+    {
+        public string MacAddress { get; set; } = string.Empty;
+    }
 }

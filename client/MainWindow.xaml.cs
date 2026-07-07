@@ -596,12 +596,134 @@ namespace client
                 }
             }
         }
+
+        private void UpdateMacAddressesButton_Click(object sender, RoutedEventArgs e)
+        {
+            var targets = PcList.Where(p => p.IsSelected).ToList();
+            if (!targets.Any())
+            {
+                Log("警告: MACアドレス更新対象のPCが選択されていません。");
+                return;
+            }
+
+            string apiKey = ApiKeyTextBox.Text;
+            Log($"{targets.Count} 台のPCでMACアドレスの取得を開始します...");
+
+            foreach (var target in targets)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        string host = target.IpAddress;
+                        int colonIdx = host.IndexOf(':');
+                        if (colonIdx > 0)
+                        {
+                            host = host.Substring(0, colonIdx);
+                        }
+
+                        var request = new HttpRequestMessage(HttpMethod.Get, $"http://{host}:5000/api/mac");
+                        request.Headers.Add("X-API-KEY", apiKey);
+
+                        var response = await httpClient.SendAsync(request);
+                        if (response.IsSuccessStatusCode)
+                        {
+                            var result = await response.Content.ReadFromJsonAsync<MacAddressResponse>();
+                            if (result != null && !string.IsNullOrEmpty(result.MacAddress))
+                            {
+                                Dispatcher.Invoke(() =>
+                                {
+                                    target.MacAddress = result.MacAddress;
+                                    Log($"[{target.IpAddress}] MACアドレスを取得しました: {result.MacAddress}");
+                                    SavePcList();
+                                });
+                            }
+                        }
+                        else
+                        {
+                            Log($"[{target.IpAddress}] MACアドレスの取得に失敗しました。HTTP Status: {response.StatusCode}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"[{target.IpAddress}] MACアドレス取得中にエラーが発生しました: {ex.Message}");
+                    }
+                });
+            }
+        }
+
+        private async void WolBootButton_Click(object sender, RoutedEventArgs e)
+        {
+            var targets = PcList.Where(p => p.IsSelected).ToList();
+            if (!targets.Any())
+            {
+                Log("警告: WOL起動対象のPCが選択されていません。");
+                return;
+            }
+
+            int sendCount = 0;
+
+            foreach (var target in targets)
+            {
+                if (string.IsNullOrEmpty(target.MacAddress))
+                {
+                    Log($"警告: [{target.IpAddress}] はMACアドレスが登録されていないため、WOL起動をスキップします。先に「MAC更新」を行ってください。");
+                    continue;
+                }
+
+                try
+                {
+                    await SendWakeOnLanAsync(target.MacAddress);
+                    Log($"[{target.IpAddress}] へWOL起動シグナル（Magic Packet）を送信しました。");
+                    sendCount++;
+                }
+                catch (Exception ex)
+                {
+                    Log($"[{target.IpAddress}] WOL送信エラー: {ex.Message}");
+                }
+            }
+
+            if (sendCount > 0)
+            {
+                Log($"WOL起動完了: {sendCount} 台のPCへ起動信号を送信しました。");
+            }
+        }
+
+        private static async Task SendWakeOnLanAsync(string macAddress)
+        {
+            string cleanMac = System.Text.RegularExpressions.Regex.Replace(macAddress, "[-:]", "");
+            if (cleanMac.Length != 12)
+            {
+                throw new ArgumentException("無効なMACアドレスフォーマットです。12桁の16進数である必要があります。");
+            }
+
+            byte[] macBytes = new byte[6];
+            for (int i = 0; i < 6; i++)
+            {
+                macBytes[i] = Convert.ToByte(cleanMac.Substring(i * 2, 2), 16);
+            }
+
+            byte[] packet = new byte[102];
+            for (int i = 0; i < 6; i++)
+            {
+                packet[i] = 0xFF;
+            }
+            for (int i = 0; i < 16; i++)
+            {
+                Buffer.BlockCopy(macBytes, 0, packet, 6 + i * 6, 6);
+            }
+
+            using var client = new System.Net.Sockets.UdpClient();
+            client.EnableBroadcast = true;
+            await client.SendAsync(packet, packet.Length, new System.Net.IPEndPoint(System.Net.IPAddress.Broadcast, 9));
+        }
     }
 
     public class PcItem : INotifyPropertyChanged
     {
         private string _ipAddress = string.Empty;
         private string _machineName = string.Empty;
+        private string _macAddress = string.Empty;
         private bool _isSelected = true;
 
         public string IpAddress
@@ -626,6 +748,17 @@ namespace client
             }
         }
 
+        public string MacAddress
+        {
+            get => _macAddress;
+            set 
+            { 
+                _macAddress = value; 
+                OnPropertyChanged(); 
+                OnPropertyChanged(nameof(DisplayName)); 
+            }
+        }
+
         public bool IsSelected
         {
             get => _isSelected;
@@ -637,11 +770,17 @@ namespace client
         {
             get
             {
-                if (string.IsNullOrEmpty(MachineName) || IpAddress.StartsWith(MachineName, StringComparison.OrdinalIgnoreCase))
+                string baseName = IpAddress;
+                if (!string.IsNullOrEmpty(MachineName) && !IpAddress.StartsWith(MachineName, StringComparison.OrdinalIgnoreCase))
                 {
-                    return IpAddress;
+                    baseName = $"{IpAddress} ({MachineName})";
                 }
-                return $"{IpAddress} ({MachineName})";
+
+                if (!string.IsNullOrEmpty(MacAddress))
+                {
+                    return $"{baseName} [{MacAddress}]";
+                }
+                return baseName;
             }
         }
 
