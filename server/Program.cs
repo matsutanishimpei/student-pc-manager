@@ -145,6 +145,32 @@ app.MapGet("/api/processes", async () =>
 // PC情報取得API
 app.MapGet("/api/info", () => Results.Ok(new ServerInfoResponse { MachineName = Environment.MachineName }));
 
+// MACアドレス取得API
+app.MapGet("/api/mac", () =>
+{
+    try
+    {
+        var mac = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()
+            .Where(nic => nic.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Ethernet || 
+                          nic.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Wireless80211)
+            .Where(nic => nic.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up)
+            .Select(nic => nic.GetPhysicalAddress().ToString())
+            .FirstOrDefault(address => !string.IsNullOrEmpty(address));
+
+        if (string.IsNullOrEmpty(mac))
+        {
+            return Results.NotFound("Physical MAC address not found.");
+        }
+
+        string formattedMac = string.Join("-", System.Linq.Enumerable.Range(0, 6).Select(i => mac.Substring(i * 2, 2)));
+        return Results.Ok(new MacAddressResponse { MacAddress = formattedMac });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.Message);
+    }
+});
+
 app.Run();
 
 // PowerShell コマンド実行ヘルパー
