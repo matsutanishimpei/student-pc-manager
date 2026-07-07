@@ -34,6 +34,7 @@ namespace client
             InitializeMonitorTimer();
             this.Closed += Window_Closed;
             LoadConfig();
+            UpdateGroupComboBox();
             Log("sendCMD コンソールが初期化されました。");
         }
 
@@ -109,20 +110,25 @@ namespace client
             string newPc = NewPcTextBox.Text.Trim();
             if (string.IsNullOrEmpty(newPc)) return;
 
+            string group = NewPcGroupTextBox.Text.Trim();
+
             // 重複チェック
             if (!PcList.Any(p => p.IpAddress.Equals(newPc, StringComparison.OrdinalIgnoreCase)))
             {
-                PcList.Add(new PcItem { IpAddress = newPc, IsSelected = true });
-                Log($"ターゲットPCを追加しました: {newPc}");
+                PcList.Add(new PcItem { IpAddress = newPc, Group = group, IsSelected = true });
+                Log($"ターゲットPCを追加しました: {newPc}" + (string.IsNullOrEmpty(group) ? "" : $" (グループ: {group})"));
                 SavePcList();
+                UpdateGroupComboBox();
             }
             NewPcTextBox.Text = "127.0.0.1:5000";
+            NewPcGroupTextBox.Text = "";
         }
 
         private void BulkGenerateButton_Click(object sender, RoutedEventArgs e)
         {
             string prefix = PrefixTextBox.Text.Trim();
             string portText = PortTextBox.Text.Trim();
+            string group = BulkPcGroupTextBox.Text.Trim();
             
             if (!int.TryParse(StartNumTextBox.Text, out int startNum) ||
                 !int.TryParse(EndNumTextBox.Text, out int endNum) ||
@@ -150,20 +156,22 @@ namespace client
 
                 if (!PcList.Any(p => p.IpAddress.Equals(host, StringComparison.OrdinalIgnoreCase)))
                 {
-                    PcList.Add(new PcItem { IpAddress = host, IsSelected = true });
+                    PcList.Add(new PcItem { IpAddress = host, Group = group, IsSelected = true });
                     count++;
                 }
             }
 
             if (count > 0)
             {
-                Log($"一括生成完了: {count} 台のPCをリストに追加しました。");
+                Log($"一括生成完了: {count} 台のPCをリストに追加しました。" + (string.IsNullOrEmpty(group) ? "" : $" (グループ: {group})"));
                 SavePcList();
+                UpdateGroupComboBox();
             }
             else
             {
                 Log("一括生成完了: 新しく追加されたPCはありません (すべて登録済み)。");
             }
+            BulkPcGroupTextBox.Text = "";
         }
 
         private void SelectAllButton_Click(object sender, RoutedEventArgs e)
@@ -201,6 +209,7 @@ namespace client
                 }
                 Log($"{selectedItems.Count} 台のPCをリストから削除しました。");
                 SavePcList();
+                UpdateGroupComboBox();
             }
         }
 
@@ -592,6 +601,7 @@ namespace client
                 {
                     Log($"スキャン登録完了: {count} 台のPCをリストに追加しました。");
                     SavePcList();
+                    UpdateGroupComboBox();
                 }
                 else
                 {
@@ -766,6 +776,73 @@ namespace client
         {
             SaveConfig();
         }
+
+        private bool _isUpdatingGroupComboBox = false;
+
+        private void UpdateGroupComboBox()
+        {
+            if (GroupFilterComboBox == null) return;
+
+            _isUpdatingGroupComboBox = true;
+            try
+            {
+                string? selectedGroup = GroupFilterComboBox.SelectedItem as string;
+
+                GroupFilterComboBox.Items.Clear();
+                GroupFilterComboBox.Items.Add("（選択してください）");
+                GroupFilterComboBox.Items.Add("（グループ未設定）");
+
+                var groups = PcList
+                    .Where(p => !string.IsNullOrEmpty(p.Group))
+                    .Select(p => p.Group)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(g => g)
+                    .ToList();
+
+                foreach (var g in groups)
+                {
+                    GroupFilterComboBox.Items.Add(g);
+                }
+
+                if (selectedGroup != null && GroupFilterComboBox.Items.Contains(selectedGroup))
+                {
+                    GroupFilterComboBox.SelectedItem = selectedGroup;
+                }
+                else
+                {
+                    GroupFilterComboBox.SelectedIndex = 0;
+                }
+            }
+            finally
+            {
+                _isUpdatingGroupComboBox = false;
+            }
+        }
+
+        private void GroupFilterComboBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        {
+            if (_isUpdatingGroupComboBox) return;
+
+            string? selectedGroup = GroupFilterComboBox.SelectedItem as string;
+            if (string.IsNullOrEmpty(selectedGroup) || selectedGroup == "（選択してください）")
+            {
+                return;
+            }
+
+            foreach (var pc in PcList)
+            {
+                if (selectedGroup == "（グループ未設定）")
+                {
+                    pc.IsSelected = string.IsNullOrEmpty(pc.Group);
+                }
+                else
+                {
+                    pc.IsSelected = pc.Group.Equals(selectedGroup, StringComparison.OrdinalIgnoreCase);
+                }
+            }
+
+            Log($"グループ「{selectedGroup}」のPCのみを選択しました。");
+        }
     }
 
     public class PcItem : INotifyPropertyChanged
@@ -773,6 +850,7 @@ namespace client
         private string _ipAddress = string.Empty;
         private string _machineName = string.Empty;
         private string _macAddress = string.Empty;
+        private string _group = string.Empty;
         private bool _isSelected = true;
 
         public string IpAddress
@@ -808,6 +886,17 @@ namespace client
             }
         }
 
+        public string Group
+        {
+            get => _group;
+            set 
+            { 
+                _group = value; 
+                OnPropertyChanged(); 
+                OnPropertyChanged(nameof(DisplayName)); 
+            }
+        }
+
         public bool IsSelected
         {
             get => _isSelected;
@@ -825,9 +914,14 @@ namespace client
                     baseName = $"{IpAddress} ({MachineName})";
                 }
 
+                if (!string.IsNullOrEmpty(Group))
+                {
+                    baseName = $"[{Group}] {baseName}";
+                }
+
                 if (!string.IsNullOrEmpty(MacAddress))
                 {
-                    return $"{baseName} [{MacAddress}]";
+                    return $"{baseName} <{MacAddress}>";
                 }
                 return baseName;
             }
