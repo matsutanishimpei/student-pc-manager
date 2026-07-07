@@ -330,24 +330,42 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="選択されたPCのアクティブアプリ一覧を表示します（ダブルクリックで詳細表示）。" VerticalAlignment="Center" Foreground="#A1A1AA" FontSize="11"/>
-                                <Button Grid.Column="1" Content="一斉取得" Click="GetActiveAppsButton_Click" Padding="12,6"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <CheckBox x:Name="AutoMonitorCheckBox" Content="自動更新 (5秒)" Checked="AutoMonitorCheckBox_Checked" Unchecked="AutoMonitorCheckBox_Unchecked" Foreground="#A1A1AA" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                    <Button Content="一斉取得" Click="GetActiveAppsButton_Click" Padding="12,6"/>
+                                </StackPanel>
                             </Grid>
                             
-                            <ListView x:Name="MonitorListView" Grid.Row="1" Background="#121214" BorderBrush="#27272A" Foreground="#E4E4E7" MouseDoubleClick="MonitorListView_MouseDoubleClick">
-                                <ListView.View>
-                                    <GridView>
-                                        <GridViewColumn Header="PCアドレス/ホスト名" DisplayMemberBinding="{Binding PcAddress}" Width="160"/>
-                                        <GridViewColumn Header="ステータス" Width="100">
-                                            <GridViewColumn.CellTemplate>
-                                                <DataTemplate>
-                                                    <TextBlock Text="{Binding Status}" Foreground="{Binding StatusColor}" FontWeight="Bold"/>
-                                                </DataTemplate>
-                                            </GridViewColumn.CellTemplate>
-                                        </GridViewColumn>
-                                        <GridViewColumn Header="アクティブアプリ" DisplayMemberBinding="{Binding ActiveApp}" Width="300"/>
-                                    </GridView>
-                                </ListView.View>
-                            </ListView>
+                            <ListBox x:Name="MonitorListBox" Grid.Row="1" Background="#121214" BorderBrush="#27272A" Foreground="#E4E4E7" MouseDoubleClick="MonitorListBox_MouseDoubleClick" ScrollViewer.HorizontalScrollBarVisibility="Disabled" BorderThickness="1">
+                                <ListBox.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel />
+                                    </ItemsPanelTemplate>
+                                </ListBox.ItemsPanel>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border BorderBrush="#27272A" BorderThickness="1" Background="#1E1E21" CornerRadius="6" Width="160" Height="90" Margin="5" Padding="8">
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="*"/>
+                                                </Grid.RowDefinitions>
+                                                
+                                                <Grid Grid.Row="0" Margin="0,0,0,6">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{Binding PcAddress}" FontWeight="Bold" FontSize="11" Foreground="#F4F4F5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                                    <Ellipse Grid.Column="1" Width="8" Height="8" Fill="{Binding StatusColor}" VerticalAlignment="Center" Margin="5,0,0,0"/>
+                                                </Grid>
+                                                
+                                                <TextBlock Grid.Row="1" Text="{Binding ActiveApp}" FontSize="11" Foreground="#A1A1AA" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Top"/>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
                         </Grid>
                     </Border>
                 </TabItem>
