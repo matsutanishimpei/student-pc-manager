@@ -232,9 +232,84 @@ static void ExecuteCommand(string fileName, string arguments)
     catch {}
 }
 
+// 外部コマンド実行用ヘルパー (結果取得版)
+static CommandResponse ExecuteCommandWithResult(string fileName, string arguments)
+{
+    var result = new CommandResponse();
+    try
+    {
+        using var process = new Process();
+        process.StartInfo.FileName = fileName;
+        process.StartInfo.Arguments = arguments;
+        process.StartInfo.RedirectStandardOutput = true;
+        process.StartInfo.RedirectStandardError = true;
+        process.StartInfo.UseShellExecute = false;
+        process.StartInfo.CreateNoWindow = true;
+        process.Start();
+        
+        string stdout = process.StandardOutput.ReadToEnd();
+        string stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        
+        result.ExitCode = process.ExitCode;
+        result.Stdout = stdout;
+        result.Stderr = stderr;
+    }
+    catch (Exception ex)
+    {
+        result.ExitCode = -1;
+        result.Stderr = ex.Message;
+    }
+    return result;
+}
+
 // 対話型ユーザーのコンソールセッション内でPowerShellスクリプトを実行するヘルパー (スクリプトファイル生成方式)
 static async Task<byte[]?> ExecutePowerShellInUserSessionAsync(string psCommand, string fileExtension)
 {
+    int sessionId = 0;
+    try
+    {
+        sessionId = Process.GetCurrentProcess().SessionId;
+    }
+    catch {}
+
+    // 1. すでに非Session 0 (対話型セッション) で稼働しているなら、タスクスケジューラを経由せず直接PowerShellを実行する
+    if (sessionId != 0)
+    {
+        try
+        {
+            string tempOutFile = Path.Combine("C:\\Users\\Public", "sendCMD_direct_" + Guid.NewGuid().ToString("N").Substring(0, 8) + "." + fileExtension);
+            string directScript;
+            if (fileExtension == "png")
+            {
+                directScript = psCommand.Replace("{OUT_FILE}", tempOutFile.Replace("\\", "\\\\"));
+            }
+            else
+            {
+                directScript = $"$r = $({psCommand}); Out-File -FilePath '{tempOutFile}' -InputObject $r -Encoding utf8";
+            }
+
+            var resp = ExecutePowerShell(directScript);
+            if (resp.ExitCode == 0 && File.Exists(tempOutFile))
+            {
+                byte[] bytes = await File.ReadAllBytesAsync(tempOutFile);
+                try { File.Delete(tempOutFile); } catch {}
+                return bytes;
+            }
+            else
+            {
+                Console.WriteLine($"[Direct Execution Error] ExitCode: {resp.ExitCode}, Stderr: {resp.Stderr}");
+                return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Direct Execution Exception] {ex.Message}");
+            return null;
+        }
+    }
+
+    // 2. Session 0 (Windowsサービス) の場合は、スケジュールタスクを経由して実行する
     string taskId = "sendCMD_US_" + Guid.NewGuid().ToString("N").Substring(0, 8);
     string scriptFile = Path.Combine("C:\\Users\\Public", taskId + ".ps1");
     string outputFile = Path.Combine("C:\\Users\\Public", taskId + "." + fileExtension);
@@ -256,10 +331,18 @@ static async Task<byte[]?> ExecutePowerShellInUserSessionAsync(string psCommand,
 
         // 2. スケジュールタスクの作成 (引数エスケープの問題を避けるため、ファイルを指定して実行)
         string createArgs = $"/create /tn \"{taskId}\" /tr \"powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File \\\"{scriptFile}\\\"\" /sc ONCE /st 00:00 /ru INTERACTIVE /f";
-        ExecuteCommand("schtasks.exe", createArgs);
+        var createResp = ExecuteCommandWithResult("schtasks.exe", createArgs);
+        if (createResp.ExitCode != 0)
+        {
+            Console.WriteLine($"[schtasks create FAILED] ExitCode: {createResp.ExitCode}, Stderr: {createResp.Stderr}");
+        }
 
         // 3. タスクの実行
-        ExecuteCommand("schtasks.exe", $"/run /tn \"{taskId}\"");
+        var runResp = ExecuteCommandWithResult("schtasks.exe", $"/run /tn \"{taskId}\"");
+        if (runResp.ExitCode != 0)
+        {
+            Console.WriteLine($"[schtasks run FAILED] ExitCode: {runResp.ExitCode}, Stderr: {runResp.Stderr}");
+        }
 
         // 4. 出力ファイルの生成待ち (最大10秒)
         bool fileCreated = false;
@@ -287,8 +370,9 @@ static async Task<byte[]?> ExecutePowerShellInUserSessionAsync(string psCommand,
         try { File.Delete(outputFile); } catch {}
         return resultBytes;
     }
-    catch
+    catch (Exception ex)
     {
+        Console.WriteLine($"[Session 0 Execution Exception] {ex.Message}");
         return null;
     }
 }
