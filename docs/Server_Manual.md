@@ -16,12 +16,13 @@
 ### ステップ 1: 設定の編集 (appsettings.json)
 配布された `server` フォルダ内の `appsettings.json` をテキストエディタで開き、環境に合わせて設定値を変更します。
 *   **`ApiKey`:** 教員PCと通信する際の認証暗号キーです。任意の安全な文字列に変更してください（教員PC側と一致させる必要があります）。
-*   **`UploadDirectory`:** 教員PCから送られてきたインストーラーを一時的に保存するフォルダです。デフォルトは `C:\Windows\Temp\sendCMD_uploads` です。
+*   **`UploadDirectory`:** 教員PCから送られてきたインストーラーを一時的に保存するフォルダです。**デフォルトは `C:\Users\Public\sendCMD_uploads` です。**
+    *(※ SYSTEM権限と一般の対話型ユーザーセッション（生徒ユーザー）の双方がアクセス・実行可能な Public パスを使用することが推奨されます)*
 
 ```json
 {
   "ApiKey": "設定した独自の認証キー",
-  "UploadDirectory": "C:\\Windows\\Temp\\sendCMD_uploads"
+  "UploadDirectory": "C:\\Users\\Public\\sendCMD_uploads"
 }
 ```
 
@@ -40,8 +41,6 @@
 
 ### アンインストールについて
 サービスを完全に削除したい場合は、同様に配布ファイル内の **`uninstall.bat` をダブルクリック** して実行してください。サービスの停止、登録削除、ファイアウォール規則の削除、ファイルの削除がすべて自動で行われます。
-
----
 
 ---
 
