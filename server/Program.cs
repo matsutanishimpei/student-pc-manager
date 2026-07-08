@@ -141,18 +141,18 @@ app.MapGet("/api/screenshot", async () =>
                        "$b = New-Object System.Drawing.Bitmap $s.Width, $s.Height; " +
                        "$g = [System.Drawing.Graphics]::FromImage($b); " +
                        "$g.CopyFromScreen($s.X, $s.Y, 0, 0, $b.Size); " +
-                       "$b.Save('{OUT_FILE}', [System.Drawing.Imaging.ImageFormat]::Png); " +
+                       "$b.Save('{OUT_FILE}', [System.Drawing.Imaging.ImageFormat]::Jpeg); " +
                        "$g.Dispose(); $b.Dispose();" +
                        "} catch {" +
                        "\"[Screenshot Error] $_\" | Out-File -FilePath 'C:\\Users\\Public\\sendCMD_US_error_log.txt' -Append -Encoding utf8" +
                        "}";
 
-    byte[]? imageBytes = await ExecutePowerShellInUserSessionAsync(psCommand, "png");
+    byte[]? imageBytes = await ExecutePowerShellInUserSessionAsync(psCommand, "jpg");
     if (imageBytes == null)
     {
         return Results.StatusCode(504); // Gateway Timeout (ユーザーがログインしていない等)
     }
-    return Results.File(imageBytes, "image/png");
+    return Results.File(imageBytes, "image/jpeg");
 });
 
 // 稼働中のアクティブアプリ一覧取得 API (対話型セッション内で実行)

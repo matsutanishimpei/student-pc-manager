@@ -152,8 +152,8 @@ namespace client
 
             var saveFileDialog = new SaveFileDialog
             {
-                Filter = "PNG画像 (*.png)|*.png",
-                FileName = $"{_pcAddress.Replace(":", "_")}_screenshot.png"
+                Filter = "JPEG画像 (*.jpg;*.jpeg)|*.jpg;*.jpeg|すべてのファイル (*.*)|*.*",
+                FileName = $"{_pcAddress.Replace(":", "_")}_screenshot.jpg"
             };
 
             if (saveFileDialog.ShowDialog() == true)
