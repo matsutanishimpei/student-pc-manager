@@ -164,48 +164,55 @@ namespace client
                     };
                 }
 
-                // 1. ローカル名前解決を試みる (DNS / LLMNR / mDNS / NetBIOS)
-                // 1.0秒のタイムアウト付き
-                var hostEntry = await GetHostEntryWithTimeoutAsync(ip, TimeSpan.FromMilliseconds(1000), token);
-                if (hostEntry != null && !string.IsNullOrEmpty(hostEntry.HostName))
-                {
-                    string hostName = hostEntry.HostName;
-                    // ドメイン名部分 (.local や .corp など) が含まれる場合は最初のピリオドまでを取得
-                    int dotIndex = hostName.IndexOf('.');
-                    if (dotIndex > 0)
-                    {
-                        hostName = hostName.Substring(0, dotIndex);
-                    }
-
-                    // Windowsの名前解決で、名前解決できなかった場合にIPアドレス自体がHostNameに入ることがある
-                    if (hostName != ip)
-                    {
-                        return new ScanResultItem
-                        {
-                            IsSelected = true,
-                            IpAddress = $"{ip}:{port}",
-                            MachineName = hostName,
-                            Status = "オンライン"
-                        };
-                    }
-                }
-
-                // 2. 名前解決ができなかった場合、TCPポート接続試行で生存確認 (TCP 135 / 445 / 5000)
+                // 1. TCPポート接続試行で生存確認 (TCP 135 / 445 / 5000 を並列で確認)
                 if (token.IsCancellationRequested) return null;
 
-                bool isAlive = await IsPortOpenAsync(ip, 135, 300, token) || 
-                               await IsPortOpenAsync(ip, 445, 300, token) ||
-                               await IsPortOpenAsync(ip, port, 300, token);
+                var portTasks = new List<Task<bool>>
+                {
+                    IsPortOpenAsync(ip, 135, 300, token),
+                    IsPortOpenAsync(ip, 445, 300, token),
+                    IsPortOpenAsync(ip, port, 300, token)
+                };
+                var portResults = await Task.WhenAll(portTasks);
+                bool isAlive = portResults.Any(r => r);
 
-                // 3. TCPポートが応答しない場合、最後の手段として Ping (ICMP) で生存確認
+                // 2. TCPポートが応答しない場合、最後の手段として Ping (ICMP) で生存確認
                 if (!isAlive)
                 {
                     if (token.IsCancellationRequested) return null;
                     isAlive = await PingHostAsync(ip, 300, token);
                 }
 
+                // 3. 生存が確認できた場合のみ、DNS名前解決を試みる (遅延実行による無駄なタイムアウト待ち排除)
                 if (isAlive)
                 {
+                    if (token.IsCancellationRequested) return null;
+
+                    var hostEntry = await GetHostEntryWithTimeoutAsync(ip, TimeSpan.FromMilliseconds(1000), token);
+                    if (hostEntry != null && !string.IsNullOrEmpty(hostEntry.HostName))
+                    {
+                        string hostName = hostEntry.HostName;
+                        // ドメイン名部分 (.local や .corp など) が含まれる場合は最初のピリオドまでを取得
+                        int dotIndex = hostName.IndexOf('.');
+                        if (dotIndex > 0)
+                        {
+                            hostName = hostName.Substring(0, dotIndex);
+                        }
+
+                        // Windowsの名前解決で、名前解決できなかった場合にIPアドレス自体がHostNameに入ることがある
+                        if (hostName != ip)
+                        {
+                            return new ScanResultItem
+                            {
+                                IsSelected = true,
+                                IpAddress = $"{ip}:{port}",
+                                MachineName = hostName,
+                                Status = "オンライン"
+                            };
+                        }
+                    }
+
+                    // 名前解決はできなかったが生存している場合
                     return new ScanResultItem
                     {
                         IsSelected = false, // PC名が取れなかったのでデフォルトでは未選択にする
