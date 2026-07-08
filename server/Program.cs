@@ -22,6 +22,14 @@ builder.Host.UseWindowsService();
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.ListenAnyIP(5000);
+    // 最大リクエストボディサイズを500MBに設定 (デフォルトは30MB)
+    options.Limits.MaxRequestBodySize = 524288000; 
+});
+
+// マルチパートフォーム（ファイルアップロード）の上限を500MBに設定
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
+{
+    options.MultipartBodyLengthLimit = 524288000;
 });
 
 var app = builder.Build();
@@ -49,15 +57,38 @@ app.Use(async (context, next) =>
 app.MapGet("/", () => "sendCMD Server is running.");
 
 // PowerShellコマンド実行API
-app.MapPost("/api/exec", ([FromBody] CommandRequest request) =>
+app.MapPost("/api/exec", async ([FromBody] CommandRequest request) =>
 {
     if (string.IsNullOrWhiteSpace(request.Command))
     {
         return Results.BadRequest(new CommandResponse { ExitCode = -1, Stderr = "Command is empty." });
     }
 
-    var response = ExecutePowerShell(request.Command);
-    return Results.Ok(response);
+    if (request.RunInUserSession)
+    {
+        // 対話型ユーザーセッションとして実行する
+        byte[]? bytes = await ExecutePowerShellInUserSessionAsync(request.Command, "txt");
+        if (bytes == null)
+        {
+            return Results.Ok(new CommandResponse 
+            { 
+                ExitCode = -1, 
+                Stderr = "Failed to execute PowerShell command in interactive user session. (Check logs at C:\\Users\\Public\\sendCMD_server_log.txt)" 
+            });
+        }
+        string output = System.Text.Encoding.UTF8.GetString(bytes).Trim();
+        return Results.Ok(new CommandResponse 
+        { 
+            ExitCode = 0, 
+            Stdout = output 
+        });
+    }
+    else
+    {
+        // 通常通り SYSTEM アカウント権限で実行する
+        var response = ExecutePowerShell(request.Command);
+        return Results.Ok(response);
+    }
 });
 
 // ファイルアップロード（インストーラーの配布用）API
@@ -77,7 +108,7 @@ app.MapPost("/api/upload", async (HttpRequest request) =>
     }
 
     // アップロードされたファイルの保存先ディレクトリの決定
-    string defaultUploadDir = Path.Combine(Path.GetTempPath(), "sendCMD_uploads");
+    string defaultUploadDir = "C:\\Users\\Public\\sendCMD_uploads";
     string uploadDir = app.Configuration["UploadDirectory"] ?? defaultUploadDir;
     
     try
@@ -104,13 +135,17 @@ app.MapPost("/api/upload", async (HttpRequest request) =>
 // 画面キャプチャ取得 API (Session 0 隔離対策としてスケジュールタスク経由で対話型セッションにて実行)
 app.MapGet("/api/screenshot", async () =>
 {
-    string psCommand = "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; " +
+    string psCommand = "try { " +
+                       "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; " +
                        "$s = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; " +
                        "$b = New-Object System.Drawing.Bitmap $s.Width, $s.Height; " +
                        "$g = [System.Drawing.Graphics]::FromImage($b); " +
                        "$g.CopyFromScreen($s.X, $s.Y, 0, 0, $b.Size); " +
                        "$b.Save('{OUT_FILE}', [System.Drawing.Imaging.ImageFormat]::Png); " +
-                       "$g.Dispose(); $b.Dispose();";
+                       "$g.Dispose(); $b.Dispose();" +
+                       "} catch {" +
+                       "\"[Screenshot Error] $_\" | Out-File -FilePath 'C:\\Users\\Public\\sendCMD_US_error_log.txt' -Append -Encoding utf8" +
+                       "}";
 
     byte[]? imageBytes = await ExecutePowerShellInUserSessionAsync(psCommand, "png");
     if (imageBytes == null)
@@ -173,6 +208,17 @@ app.MapGet("/api/mac", () =>
 
 app.Run();
 
+// ログ出力用ヘルパー
+static void WriteLog(string message)
+{
+    try
+    {
+        string logPath = "C:\\Users\\Public\\sendCMD_server_log.txt";
+        System.IO.File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}\n");
+    }
+    catch {}
+}
+
 // PowerShell コマンド実行ヘルパー
 static CommandResponse ExecutePowerShell(string command)
 {
@@ -216,52 +262,6 @@ static CommandResponse ExecutePowerShell(string command)
     return result;
 }
 
-// 外部コマンド実行用ヘルパー (schtasks.exe等)
-static void ExecuteCommand(string fileName, string arguments)
-{
-    try
-    {
-        using var process = new Process();
-        process.StartInfo.FileName = fileName;
-        process.StartInfo.Arguments = arguments;
-        process.StartInfo.UseShellExecute = false;
-        process.StartInfo.CreateNoWindow = true;
-        process.Start();
-        process.WaitForExit();
-    }
-    catch {}
-}
-
-// 外部コマンド実行用ヘルパー (結果取得版)
-static CommandResponse ExecuteCommandWithResult(string fileName, string arguments)
-{
-    var result = new CommandResponse();
-    try
-    {
-        using var process = new Process();
-        process.StartInfo.FileName = fileName;
-        process.StartInfo.Arguments = arguments;
-        process.StartInfo.RedirectStandardOutput = true;
-        process.StartInfo.RedirectStandardError = true;
-        process.StartInfo.UseShellExecute = false;
-        process.StartInfo.CreateNoWindow = true;
-        process.Start();
-        
-        string stdout = process.StandardOutput.ReadToEnd();
-        string stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        
-        result.ExitCode = process.ExitCode;
-        result.Stdout = stdout;
-        result.Stderr = stderr;
-    }
-    catch (Exception ex)
-    {
-        result.ExitCode = -1;
-        result.Stderr = ex.Message;
-    }
-    return result;
-}
 
 // 対話型ユーザーのコンソールセッション内でPowerShellスクリプトを実行するヘルパー (スクリプトファイル生成方式)
 static async Task<byte[]?> ExecutePowerShellInUserSessionAsync(string psCommand, string fileExtension)
@@ -298,30 +298,31 @@ static async Task<byte[]?> ExecutePowerShellInUserSessionAsync(string psCommand,
             }
             else
             {
-                Console.WriteLine($"[Direct Execution Error] ExitCode: {resp.ExitCode}, Stderr: {resp.Stderr}");
+                WriteLog($"[Direct Execution Error] ExitCode: {resp.ExitCode}, Stderr: {resp.Stderr}");
                 return null;
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[Direct Execution Exception] {ex.Message}");
+            WriteLog($"[Direct Execution Exception] {ex.Message}");
             return null;
         }
     }
 
-    // 2. Session 0 (Windowsサービス) の場合は、スケジュールタスクを経由して実行する
+    // 2. Session 0 (Windowsサービス) の場合は、CreateProcessAsUser で対話型デスクトップ上で実行する
     string taskId = "sendCMD_US_" + Guid.NewGuid().ToString("N").Substring(0, 8);
     string scriptFile = Path.Combine("C:\\Users\\Public", taskId + ".ps1");
     string outputFile = Path.Combine("C:\\Users\\Public", taskId + "." + fileExtension);
-    
+
     string fullScriptContent;
     if (fileExtension == "png")
     {
-        fullScriptContent = psCommand.Replace("{OUT_FILE}", outputFile.Replace("\\", "\\\\"));
+        // .ps1 ファイル内のシングルクォート文字列ではバックスラッシュはリテラル扱い
+        fullScriptContent = psCommand.Replace("{OUT_FILE}", outputFile);
     }
     else
     {
-        fullScriptContent = $"$r = $({psCommand}); Out-File -FilePath '{outputFile}' -InputObject $r -Encoding utf8";
+        fullScriptContent = $"$ErrorActionPreference = 'Continue'; $r = & {{ {psCommand} }} 2>&1 | Out-String; Out-File -FilePath '{outputFile}' -InputObject $r -Encoding utf8";
     }
 
     try
@@ -329,50 +330,35 @@ static async Task<byte[]?> ExecutePowerShellInUserSessionAsync(string psCommand,
         // 1. スクリプトファイルを書き込み (UTF-8)
         await File.WriteAllTextAsync(scriptFile, fullScriptContent, System.Text.Encoding.UTF8);
 
-        // 2. スケジュールタスクの作成 (引数エスケープの問題を避けるため、ファイルを指定して実行)
-        string createArgs = $"/create /tn \"{taskId}\" /tr \"powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File \\\"{scriptFile}\\\"\" /sc ONCE /st 00:00 /ru INTERACTIVE /f";
-        var createResp = ExecuteCommandWithResult("schtasks.exe", createArgs);
-        if (createResp.ExitCode != 0)
-        {
-            Console.WriteLine($"[schtasks create FAILED] ExitCode: {createResp.ExitCode}, Stderr: {createResp.Stderr}");
-        }
+        // 2. CreateProcessAsUser で対話型デスクトップ上の PowerShell を起動
+        string cmdLine = $"powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{scriptFile}\"";
+        var (success, error) = InteractiveProcessHelper.RunInUserSession(cmdLine, 15000);
 
-        // 3. タスクの実行
-        var runResp = ExecuteCommandWithResult("schtasks.exe", $"/run /tn \"{taskId}\"");
-        if (runResp.ExitCode != 0)
-        {
-            Console.WriteLine($"[schtasks run FAILED] ExitCode: {runResp.ExitCode}, Stderr: {runResp.Stderr}");
-        }
-
-        // 4. 出力ファイルの生成待ち (最大10秒)
-        bool fileCreated = false;
-        for (int i = 0; i < 50; i++)
-        {
-            if (File.Exists(outputFile))
-            {
-                fileCreated = true;
-                break;
-            }
-            await Task.Delay(200);
-        }
-
-        // 5. クリーンアップ
-        ExecuteCommand("schtasks.exe", $"/delete /tn \"{taskId}\" /f");
+        // 3. スクリプトファイルのクリーンアップ
         try { File.Delete(scriptFile); } catch {}
 
-        if (!fileCreated)
+        if (!success)
         {
+            WriteLog($"[CreateProcessAsUser FAILED] {error}");
             return null;
         }
 
-        // 6. 出力データの読み込みとファイル削除
+        // 4. 出力ファイルの存在とサイズを確認
+        if (!File.Exists(outputFile) || new FileInfo(outputFile).Length == 0)
+        {
+            WriteLog($"[Output File Missing] {outputFile} was not created or is empty after CreateProcessAsUser");
+            return null;
+        }
+
+        // 5. 出力データの読み込みとファイル削除
         byte[] resultBytes = await File.ReadAllBytesAsync(outputFile);
         try { File.Delete(outputFile); } catch {}
         return resultBytes;
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"[Session 0 Execution Exception] {ex.Message}");
+        WriteLog($"[Session 0 Execution Exception] {ex.Message}");
+        try { File.Delete(scriptFile); } catch {}
         return null;
     }
 }

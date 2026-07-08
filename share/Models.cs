@@ -5,6 +5,7 @@ namespace Share.Models
     public class CommandRequest
     {
         public string Command { get; set; } = string.Empty;
+        public bool RunInUserSession { get; set; } = false;
     }
 
     public class CommandResponse
