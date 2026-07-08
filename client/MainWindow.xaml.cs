@@ -254,7 +254,7 @@ namespace client
                     Log($"[{target.IpAddress}] コマンド実行中...");
                     try
                     {
-                        var reqObj = new CommandRequest { Command = command };
+                        var reqObj = new CommandRequest { Command = command, RunInUserSession = true };
                         var request = new HttpRequestMessage(HttpMethod.Post, $"http://{target.IpAddress}/api/exec")
                         {
                             Content = JsonContent.Create(reqObj)
@@ -362,13 +362,22 @@ namespace client
                                 // msi の場合は msiexec を使用してサイレントインストール
                                 installCmd = $"Start-Process msiexec.exe -ArgumentList \"/i \\\"{remotePath}\\\" {runArgs} /norestart\" -Wait -PassThru";
                             }
+                            else if (ext == ".msix" || ext == ".appx")
+                            {
+                                // MSIX / APPX パッケージの場合は対話型セッション内でパッケージを登録
+                                installCmd = $"Add-AppxPackage -Path \"{remotePath}\"";
+                            }
                             else
                             {
                                 // exe などの場合は直接実行
                                 installCmd = $"Start-Process \"{remotePath}\" -ArgumentList \"{runArgs}\" -Wait -PassThru";
                             }
 
-                            var execReqObj = new CommandRequest { Command = installCmd };
+                            var execReqObj = new CommandRequest 
+                            { 
+                                Command = installCmd,
+                                RunInUserSession = (ext == ".msix" || ext == ".appx") || (RunAsUserCheckBox.IsChecked == true)
+                            };
                             var execRequest = new HttpRequestMessage(HttpMethod.Post, $"http://{target.IpAddress}/api/exec")
                             {
                                 Content = JsonContent.Create(execReqObj)
