@@ -18,7 +18,7 @@ namespace client
         private readonly string _pcAddress;
         private readonly string _apiKey;
         private byte[]? _currentImageBytes;
-        private static readonly HttpClient httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+        private static readonly HttpClient httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
 
         public ProcessViewerWindow(string pcAddress, string apiKey)
         {

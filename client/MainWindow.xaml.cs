@@ -17,6 +17,7 @@ namespace client
     {
         public ObservableCollection<PcItem> PcList { get; set; }
         private static readonly HttpClient httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        private static readonly HttpClient monitoringHttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
 
         private static readonly string PcsFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "pcs.json");
 
@@ -483,7 +484,7 @@ namespace client
                         var request = new HttpRequestMessage(HttpMethod.Get, $"http://{target.IpAddress}/api/activeapp");
                         request.Headers.Add("X-API-KEY", apiKey);
 
-                        var response = await httpClient.SendAsync(request);
+                        var response = await monitoringHttpClient.SendAsync(request);
                         if (response.IsSuccessStatusCode)
                         {
                             var result = await response.Content.ReadFromJsonAsync<ActiveAppResponse>();
@@ -647,7 +648,7 @@ namespace client
                         var request = new HttpRequestMessage(HttpMethod.Get, $"http://{host}:5000/api/mac");
                         request.Headers.Add("X-API-KEY", apiKey);
 
-                        var response = await httpClient.SendAsync(request);
+                        var response = await monitoringHttpClient.SendAsync(request);
                         if (response.IsSuccessStatusCode)
                         {
                             var result = await response.Content.ReadFromJsonAsync<MacAddressResponse>();
