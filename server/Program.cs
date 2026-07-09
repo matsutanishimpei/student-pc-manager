@@ -206,6 +206,9 @@ app.MapGet("/api/mac", () =>
     }
 });
 
+// 常駐ヘルパープロセスの登録と初回起動
+RegisterAndStartHelper();
+
 app.Run();
 
 // ログ出力用ヘルパー
@@ -266,6 +269,37 @@ static CommandResponse ExecutePowerShell(string command)
 // 対話型ユーザーのコンソールセッション内でPowerShellスクリプトを実行するヘルパー (スクリプトファイル生成方式)
 static async Task<byte[]?> ExecutePowerShellInUserSessionAsync(string psCommand, string fileExtension)
 {
+    // --- 常駐ヘルパープロセスによる高速処理の試行 ---
+    string? helperCmd = null;
+    if (fileExtension == "jpg" && psCommand.Contains("System.Windows.Forms"))
+    {
+        helperCmd = "screenshot";
+    }
+    else if (psCommand == "(Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object -ExpandProperty MainWindowTitle) -join ', '")
+    {
+        helperCmd = "activeapp";
+    }
+    else if (psCommand == "$p = Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object ProcessName, Id, MainWindowTitle; if ($p) { ConvertTo-Json @($p) -Compress } else { '[]' }")
+    {
+        helperCmd = "processes";
+    }
+
+    if (helperCmd != null)
+    {
+        try
+        {
+            byte[]? pipeResponse = await HelperPipeClient.SendCommandAsync(helperCmd, timeoutMs: 500);
+            if (pipeResponse != null)
+            {
+                return pipeResponse;
+            }
+        }
+        catch (Exception ex)
+        {
+            WriteLog($"[Helper Pipe Error] Command {helperCmd} failed: {ex.Message}");
+        }
+    }
+
     int sessionId = 0;
     try
     {
@@ -360,5 +394,66 @@ static async Task<byte[]?> ExecutePowerShellInUserSessionAsync(string psCommand,
         WriteLog($"[Session 0 Execution Exception] {ex.Message}");
         try { File.Delete(scriptFile); } catch {}
         return null;
+    }
+}
+
+// 常駐ヘルパープロセスの登録と起動を行うヘルパー
+static void RegisterAndStartHelper()
+{
+    try
+    {
+        string helperPath = Path.Combine(AppContext.BaseDirectory, "sendCMD_helper.exe");
+        if (!File.Exists(helperPath))
+        {
+            WriteLog($"[Helper Startup] sendCMD_helper.exe not found at {helperPath}");
+            return;
+        }
+
+        // 1. レジストリ (HKLM Run) に登録
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                using (var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", writable: true))
+                {
+                    if (key != null)
+                    {
+                        key.SetValue("sendCMD_helper", $"\"{helperPath}\"");
+                        WriteLog("[Helper Startup] Registered sendCMD_helper in HKLM Run registry key");
+                    }
+                    else
+                    {
+                        WriteLog("[Helper Startup] Failed to open HKLM Run registry key");
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            WriteLog($"[Helper Startup] Registry registration failed: {ex.Message}");
+        }
+
+        // 2. 現在ログイン中のユーザーセッションがあれば、CreateProcessAsUser で helper.exe を即起動 (非同期)
+        try
+        {
+            WriteLog("[Helper Startup] Attempting to start sendCMD_helper in active user session...");
+            var (success, error) = InteractiveProcessHelper.RunInUserSession($"\"{helperPath}\"", 5000, wait: false);
+            if (success)
+            {
+                WriteLog("[Helper Startup] sendCMD_helper launch command sent successfully (wait: false)");
+            }
+            else
+            {
+                WriteLog($"[Helper Startup] sendCMD_helper launch failed or no active session: {error}");
+            }
+        }
+        catch (Exception ex)
+        {
+            WriteLog($"[Helper Startup] Exception during user session launch: {ex.Message}");
+        }
+    }
+    catch (Exception ex)
+    {
+        WriteLog($"[Helper Startup] Exception in RegisterAndStartHelper: {ex.Message}");
     }
 }

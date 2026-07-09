@@ -18,6 +18,8 @@ echo [1/3] サービス停止・削除およびプロセス強制終了中...
 sc.exe stop sendCMD >nul 2>&1
 sc.exe delete sendCMD >nul 2>&1
 taskkill /f /im server.exe >nul 2>&1
+taskkill /f /im sendCMD_helper.exe >nul 2>&1
+reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v sendCMD_helper /f >nul 2>&1
 timeout /t 2 /nobreak >nul
 
 echo [2/3] ファイアウォール規則の削除中...

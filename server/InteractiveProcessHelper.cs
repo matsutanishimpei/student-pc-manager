@@ -76,12 +76,13 @@ public static class InteractiveProcessHelper
 
     /// <summary>
     /// アクティブなコンソールセッションの対話型デスクトップ (winsta0\default) 上で
-    /// 指定されたコマンドラインを実行し、完了を待機します。
+    /// 指定されたコマンドラインを実行します。
     /// </summary>
     /// <param name="commandLine">実行するコマンドライン</param>
     /// <param name="timeoutMs">タイムアウト（ミリ秒）。デフォルト15秒。</param>
+    /// <param name="wait">プロセスの完了を待機するかどうか。デフォルトは true。</param>
     /// <returns>成功可否とエラーメッセージのタプル</returns>
-    public static (bool Success, string Error) RunInUserSession(string commandLine, uint timeoutMs = 15000)
+    public static (bool Success, string Error) RunInUserSession(string commandLine, uint timeoutMs = 15000, bool wait = true)
     {
         IntPtr userToken = IntPtr.Zero;
         IntPtr dupToken = IntPtr.Zero;
@@ -120,7 +121,10 @@ public static class InteractiveProcessHelper
                 return (false, $"CreateProcessAsUser failed: Win32Error={Marshal.GetLastWin32Error()}");
 
             // 7. プロセスの完了を待機
-            WaitForSingleObject(pi.hProcess, timeoutMs);
+            if (wait)
+            {
+                WaitForSingleObject(pi.hProcess, timeoutMs);
+            }
 
             // 8. ハンドルをクリーンアップ
             CloseHandle(pi.hThread);
