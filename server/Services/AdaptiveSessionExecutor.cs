@@ -32,7 +32,16 @@ namespace Server.Services
         {
             // 1. Try Helper Process via Named Pipe
             byte[]? data = await HelperPipeClient.SendCommandAsync("screenshot", timeoutMs: 500);
-            if (data != null) return data;
+            if (data != null && data.Length > 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF)
+            {
+                return data;
+            }
+
+            if (data != null)
+            {
+                string errorMsg = Encoding.UTF8.GetString(data);
+                Log.Write($"[Helper Screenshot Failed] Helper returned non-JPEG data (length {data.Length}): {errorMsg}");
+            }
 
             // 2. Fallback to PowerShell
             Log.Write("[Fallback] Screenshot requested via PowerShell fallback");
