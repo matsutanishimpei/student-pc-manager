@@ -675,6 +675,113 @@ namespace client
             }
         }
 
+        private void EditStudentNameMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            var selectedItem = PcListBox.SelectedItem as PcItem;
+            if (selectedItem == null) return;
+
+            var dialog = new InputDialog($"PC '{selectedItem.IpAddress}' に割り当てる学生名を入力してください:", selectedItem.StudentName)
+            {
+                Owner = this
+            };
+
+            if (dialog.ShowDialog() == true)
+            {
+                selectedItem.StudentName = dialog.InputText.Trim();
+                Log($"[{selectedItem.IpAddress}] 学生名を「{selectedItem.StudentName}」に割り当てました。");
+                SavePcList();
+            }
+        }
+
+        private void ClearStudentNameMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            var selectedItem = PcListBox.SelectedItem as PcItem;
+            if (selectedItem == null) return;
+
+            if (MessageBox.Show($"PC '{selectedItem.IpAddress}' の学生名の割り当てを解除しますか？", "割り当て解除の確認", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+            {
+                selectedItem.StudentName = string.Empty;
+                Log($"[{selectedItem.IpAddress}] 学生名の割り当てを解除しました。");
+                SavePcList();
+            }
+        }
+
+        private void ImportStudentNamesButton_Click(object sender, RoutedEventArgs e)
+        {
+            var openFileDialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Filter = "CSVファイル (*.csv)|*.csv|テキストファイル (*.txt)|*.txt|すべてのファイル (*.*)|*.*",
+                Title = "学生名割り当てCSVのインポート"
+            };
+
+            if (openFileDialog.ShowDialog() != true) return;
+
+            // Ask if they want to clear existing mappings first
+            var clearChoice = MessageBox.Show(
+                "インポートする前に、既存の学生名割り当てをすべてクリアしますか？\n\n「はい」：クリアしてからインポート\n「いいえ」：クリアせず上書き・追加",
+                "インポート設定",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question
+            );
+
+            if (clearChoice == MessageBoxResult.Cancel) return;
+
+            try
+            {
+                // Register code pages provider for Shift-JIS support
+                System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+                
+                var encoding = System.Text.Encoding.GetEncoding(932);
+                var lines = File.ReadAllLines(openFileDialog.FileName, encoding);
+
+                if (clearChoice == MessageBoxResult.Yes)
+                {
+                    foreach (var pc in PcList)
+                    {
+                        pc.StudentName = string.Empty;
+                    }
+                }
+
+                int successCount = 0;
+                int lineCount = 0;
+
+                foreach (var line in lines)
+                {
+                    lineCount++;
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+
+                    var parts = line.Split(',');
+                    if (parts.Length < 2) continue;
+
+                    string key = parts[0].Trim().Trim('"', '\'');
+                    string studentName = parts[1].Trim().Trim('"', '\'');
+
+                    if (string.IsNullOrEmpty(key)) continue;
+
+                    var matchedPc = PcList.FirstOrDefault(p => 
+                        p.IpAddress.Equals(key, StringComparison.OrdinalIgnoreCase) ||
+                        p.IpAddress.StartsWith(key + ":", StringComparison.OrdinalIgnoreCase) ||
+                        p.MachineName.Equals(key, StringComparison.OrdinalIgnoreCase)
+                    );
+
+                    if (matchedPc != null)
+                    {
+                        matchedPc.StudentName = studentName;
+                        successCount++;
+                    }
+                }
+
+                SavePcList();
+                Log($"CSVインポート完了: {lineCount}行中 {successCount}台のPCに学生名を割り当てました。");
+                MessageBox.Show($"インポートが完了しました。\n\n割り当て成功: {successCount} 台", "インポート完了", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                Log($"CSVインポートエラー: {ex.Message}");
+                MessageBox.Show($"CSVのインポート中にエラーが発生しました:\n{ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
         private void UpdateMacAddressesButton_Click(object sender, RoutedEventArgs e)
         {
             var targets = PcList.Where(p => p.IsSelected).ToList();
@@ -916,6 +1023,7 @@ namespace client
         private string _machineName = string.Empty;
         private string _macAddress = string.Empty;
         private string _group = string.Empty;
+        private string _studentName = string.Empty;
         private bool _isSelected = true;
 
         public string IpAddress
@@ -962,6 +1070,17 @@ namespace client
             }
         }
 
+        public string StudentName
+        {
+            get => _studentName;
+            set 
+            { 
+                _studentName = value; 
+                OnPropertyChanged(); 
+                OnPropertyChanged(nameof(DisplayName)); 
+            }
+        }
+
         public bool IsSelected
         {
             get => _isSelected;
@@ -974,7 +1093,11 @@ namespace client
             get
             {
                 string baseName = IpAddress;
-                if (!string.IsNullOrEmpty(MachineName) && !IpAddress.StartsWith(MachineName, StringComparison.OrdinalIgnoreCase))
+                if (!string.IsNullOrEmpty(StudentName))
+                {
+                    baseName = $"{StudentName} ({IpAddress})";
+                }
+                else if (!string.IsNullOrEmpty(MachineName) && !IpAddress.StartsWith(MachineName, StringComparison.OrdinalIgnoreCase))
                 {
                     baseName = $"{IpAddress} ({MachineName})";
                 }
