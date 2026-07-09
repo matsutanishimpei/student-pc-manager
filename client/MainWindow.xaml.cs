@@ -620,6 +620,61 @@ namespace client
             }
         }
 
+        private void UpdateMachineNamesButton_Click(object sender, RoutedEventArgs e)
+        {
+            var targets = PcList.Where(p => p.IsSelected).ToList();
+            if (!targets.Any())
+            {
+                Log("警告: PC名更新対象のPCが選択されていません。");
+                return;
+            }
+
+            string apiKey = ApiKeyTextBox.Text;
+            Log($"{targets.Count} 台のPCでPC名の取得を開始します...");
+
+            foreach (var target in targets)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        string host = target.IpAddress;
+                        int colonIdx = host.IndexOf(':');
+                        if (colonIdx > 0)
+                        {
+                            host = host.Substring(0, colonIdx);
+                        }
+
+                        var request = new HttpRequestMessage(HttpMethod.Get, $"http://{host}:5000/api/info");
+                        request.Headers.Add("X-API-KEY", apiKey);
+
+                        var response = await monitoringHttpClient.SendAsync(request);
+                        if (response.IsSuccessStatusCode)
+                        {
+                            var result = await response.Content.ReadFromJsonAsync<ServerInfoResponse>();
+                            if (result != null && !string.IsNullOrEmpty(result.MachineName))
+                            {
+                                Dispatcher.Invoke(() =>
+                                {
+                                    target.MachineName = result.MachineName;
+                                    Log($"[{target.IpAddress}] PC名を取得しました: {result.MachineName}");
+                                    SavePcList();
+                                });
+                            }
+                        }
+                        else
+                        {
+                            Log($"[{target.IpAddress}] PC名の取得に失敗しました。HTTP Status: {response.StatusCode}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"[{target.IpAddress}] PC名取得中にエラーが発生しました: {ex.Message}");
+                    }
+                });
+            }
+        }
+
         private void UpdateMacAddressesButton_Click(object sender, RoutedEventArgs e)
         {
             var targets = PcList.Where(p => p.IsSelected).ToList();

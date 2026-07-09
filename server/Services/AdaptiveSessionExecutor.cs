@@ -1,14 +1,27 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
 using Share.Models;
 
 namespace Server.Services
 {
     public class AdaptiveSessionExecutor : IInteractiveTaskExecutor
     {
+        private readonly IConfiguration _configuration;
+        private readonly HashSet<string> _excludeProcesses;
+
+        public AdaptiveSessionExecutor(IConfiguration configuration)
+        {
+            _configuration = configuration;
+            var excludeList = _configuration.GetSection("ExcludeProcesses").Get<string[]>() ?? Array.Empty<string>();
+            _excludeProcesses = new HashSet<string>(excludeList, StringComparer.OrdinalIgnoreCase);
+        }
+
         private const string ScreenshotPsCommand =
             "try { " +
             "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; " +
@@ -21,9 +34,6 @@ namespace Server.Services
             "} catch {" +
             "\"[Screenshot Error] $_\" | Out-File -FilePath 'C:\\Users\\Public\\sendCMD_US_error_log.txt' -Append -Encoding utf8" +
             "}";
-
-        private const string ActiveAppPsCommand =
-            "(Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object -ExpandProperty MainWindowTitle) -join ', '";
 
         private const string ProcessesPsCommand =
             "$p = Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object ProcessName, Id, MainWindowTitle; if ($p) { ConvertTo-Json @($p) -Compress } else { '[]' }";
@@ -50,32 +60,78 @@ namespace Server.Services
 
         public async Task<string> GetActiveAppAsync()
         {
-            // 1. Try Helper Process via Named Pipe
-            byte[]? data = await HelperPipeClient.SendCommandAsync("activeapp", timeoutMs: 500);
-            if (data != null)
+            string processesJson = await GetProcessesJsonAsync();
+            try
             {
-                return Encoding.UTF8.GetString(data).Trim();
-            }
+                var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                var processes = System.Text.Json.JsonSerializer.Deserialize<ProcessItem[]>(processesJson, options);
+                if (processes == null) return string.Empty;
 
-            // 2. Fallback to PowerShell
-            Log.Write("[Fallback] ActiveApp requested via PowerShell fallback");
-            byte[]? psData = await ExecutePowerShellInUserSessionAsync(ActiveAppPsCommand, "txt");
-            return psData != null ? Encoding.UTF8.GetString(psData).Trim() : string.Empty;
+                var titles = processes
+                    .Select(p => p.MainWindowTitle)
+                    .Where(t => !string.IsNullOrEmpty(t))
+                    .ToList();
+
+                return string.Join(", ", titles);
+            }
+            catch (Exception ex)
+            {
+                Log.Write($"[ActiveApp Filter Error] Failed to generate active app title: {ex.Message}");
+                return string.Empty;
+            }
         }
 
         public async Task<string> GetProcessesJsonAsync()
         {
             // 1. Try Helper Process via Named Pipe
             byte[]? data = await HelperPipeClient.SendCommandAsync("processes", timeoutMs: 500);
+            string json;
             if (data != null)
             {
-                return Encoding.UTF8.GetString(data).Trim();
+                json = Encoding.UTF8.GetString(data).Trim();
+            }
+            else
+            {
+                // 2. Fallback to PowerShell
+                Log.Write("[Fallback] Processes requested via PowerShell fallback");
+                byte[]? psData = await ExecutePowerShellInUserSessionAsync(ProcessesPsCommand, "txt");
+                json = psData != null ? Encoding.UTF8.GetString(psData).Trim() : "[]";
             }
 
-            // 2. Fallback to PowerShell
-            Log.Write("[Fallback] Processes requested via PowerShell fallback");
-            byte[]? psData = await ExecutePowerShellInUserSessionAsync(ProcessesPsCommand, "txt");
-            return psData != null ? Encoding.UTF8.GetString(psData).Trim() : "[]";
+            return FilterProcessesJson(json);
+        }
+
+        private string FilterProcessesJson(string rawJson)
+        {
+            if (string.IsNullOrEmpty(rawJson) || rawJson == "[]" || _excludeProcesses.Count == 0)
+            {
+                return rawJson;
+            }
+
+            try
+            {
+                var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                var processes = System.Text.Json.JsonSerializer.Deserialize<ProcessItem[]>(rawJson, options);
+                if (processes == null) return "[]";
+
+                var filtered = processes
+                    .Where(p => !_excludeProcesses.Contains(p.ProcessName))
+                    .ToList();
+
+                return System.Text.Json.JsonSerializer.Serialize(filtered);
+            }
+            catch (Exception ex)
+            {
+                Log.Write($"[Process Filter Error] Failed to filter processes: {ex.Message}");
+                return rawJson;
+            }
+        }
+
+        private class ProcessItem
+        {
+            public string ProcessName { get; set; } = string.Empty;
+            public int Id { get; set; }
+            public string MainWindowTitle { get; set; } = string.Empty;
         }
 
         public async Task<CommandResponse> ExecuteCommandAsync(string command, bool runInUserSession)
@@ -162,7 +218,7 @@ namespace Server.Services
                 {
                     string tempOutFile = Path.Combine("C:\\Users\\Public", "sendCMD_direct_" + Guid.NewGuid().ToString("N").Substring(0, 8) + "." + fileExtension);
                     string directScript;
-                    if (fileExtension == "png")
+                    if (fileExtension == "jpg" || fileExtension == "png")
                     {
                         directScript = psCommand.Replace("{OUT_FILE}", tempOutFile.Replace("\\", "\\\\"));
                     }
@@ -196,7 +252,7 @@ namespace Server.Services
             string outputFile = Path.Combine("C:\\Users\\Public", taskId + "." + fileExtension);
 
             string fullScriptContent;
-            if (fileExtension == "png")
+            if (fileExtension == "jpg" || fileExtension == "png")
             {
                 fullScriptContent = psCommand.Replace("{OUT_FILE}", outputFile);
             }
