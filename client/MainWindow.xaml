@@ -258,18 +258,12 @@
             <!-- PC ListBox -->
             <ListBox x:Name="PcListBox" Grid.Row="4" Background="#1E1E21" BorderBrush="#27272A" BorderThickness="1" 
                       ScrollViewer.VerticalScrollBarVisibility="Auto" SelectionMode="Multiple" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                <ListBox.ItemContainerStyle>
-                    <Style TargetType="ListBoxItem">
-                        <Setter Property="ContextMenu">
-                            <Setter.Value>
-                                <ContextMenu>
-                                    <MenuItem Header="学生名を割り当て..." Click="EditStudentNameMenuItem_Click"/>
-                                    <MenuItem Header="学生名の割り当てを解除" Click="ClearStudentNameMenuItem_Click"/>
-                                </ContextMenu>
-                            </Setter.Value>
-                        </Setter>
-                    </Style>
-                </ListBox.ItemContainerStyle>
+                <ListBox.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="学生名を割り当て..." Click="EditStudentNameMenuItem_Click"/>
+                        <MenuItem Header="学生名の割り当てを解除" Click="ClearStudentNameMenuItem_Click"/>
+                    </ContextMenu>
+                </ListBox.ContextMenu>
                 <ListBox.ItemTemplate>
                     <DataTemplate>
                         <CheckBox IsChecked="{Binding IsSelected}" Content="{Binding DisplayName}" 
