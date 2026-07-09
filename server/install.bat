@@ -30,6 +30,7 @@ if not exist "%INSTALL_DIR%" (
     mkdir "%INSTALL_DIR%"
 )
 copy /y "%~dp0server.exe" "%INSTALL_DIR%\"
+if exist "%~dp0sendCMD_helper.exe" copy /y "%~dp0sendCMD_helper.exe" "%INSTALL_DIR%\"
 copy /y "%~dp0appsettings.json" "%INSTALL_DIR%\"
 
 echo [3/4] ファイアウォール規則を追加中 (ポート: %PORT%)...
