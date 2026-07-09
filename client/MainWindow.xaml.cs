@@ -64,6 +64,18 @@ namespace client
                 LogTextBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
                 LogTextBox.ScrollToEnd();
             }));
+
+            try
+            {
+                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "sendCMD");
+                if (!Directory.Exists(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+                string logPath = Path.Combine(dir, "client_operation_log.txt");
+                File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}");
+            }
+            catch {}
         }
 
         private ObservableCollection<PcItem> LoadPcList()

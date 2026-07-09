@@ -136,6 +136,7 @@ namespace Server.Services
 
         public async Task<CommandResponse> ExecuteCommandAsync(string command, bool runInUserSession)
         {
+            Log.Write($"[Command Execution] RunInUserSession: {runInUserSession}, Command: {command}");
             if (runInUserSession)
             {
                 byte[]? bytes = await ExecutePowerShellInUserSessionAsync(command, "txt");

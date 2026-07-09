@@ -58,6 +58,8 @@ namespace Server.Endpoints
                         await file.CopyToAsync(stream);
                     }
 
+                    Log.Write($"[File Uploaded] Target Path: {filePath}, Size: {file.Length} bytes");
+
                     return Results.Ok(new { FilePath = filePath });
                 }
                 catch (Exception)
