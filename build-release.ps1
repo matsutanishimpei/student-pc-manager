@@ -39,6 +39,7 @@ dotnet publish helper/helper.csproj -c Release -r win-x64 --self-contained true 
 
 if ($LASTEXITCODE -eq 0) {
     Copy-Item "$PublishDir/helper/sendCMD_helper.exe" "$PublishDir/server/" -Force
+    Remove-Item "$PublishDir/helper" -Recurse -Force
     Write-Host "✓ ヘルパービルド成功・サーバー同梱完了: $PublishDir\server\sendCMD_helper.exe" -ForegroundColor Green
 } else {
     Write-Error "ヘルパーのビルドに失敗しました。"
