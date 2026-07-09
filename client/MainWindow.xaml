@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:client"
         mc:Ignorable="d"
-        Title="sendCMD - 実習室管理コンソール" Height="650" Width="1000"
+        Title="sendCMD v1.2.0 - 実習室管理コンソール" Height="650" Width="1000"
         Background="#18181B" FontFamily="Segoe UI, Yu Gothic" TextElement.Foreground="#F4F4F5">
     
     <Window.Resources>
@@ -131,7 +131,10 @@
             </Grid.RowDefinitions>
 
             <!-- Title -->
-            <TextBlock Grid.Row="0" Text="ターゲットPC一覧" FontSize="18" FontWeight="Bold" Margin="0,0,0,10" Foreground="#F4F4F5"/>
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+                <TextBlock Text="ターゲットPC一覧" FontSize="18" FontWeight="Bold" Foreground="#F4F4F5"/>
+                <TextBlock Text="v1.2.0" FontSize="11" Foreground="#71717A" Margin="8,0,0,0" VerticalAlignment="Bottom" FontWeight="Normal"/>
+            </StackPanel>
 
             <!-- Add PC Methods TabControl -->
             <TabControl Grid.Row="1" Margin="0,0,0,10">
