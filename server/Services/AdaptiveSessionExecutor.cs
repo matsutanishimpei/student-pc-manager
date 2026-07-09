@@ -101,7 +101,7 @@ namespace Server.Services
             return FilterProcessesJson(json);
         }
 
-        private string FilterProcessesJson(string rawJson)
+        internal string FilterProcessesJson(string rawJson)
         {
             if (string.IsNullOrEmpty(rawJson) || rawJson == "[]" || _excludeProcesses.Count == 0)
             {
@@ -127,7 +127,7 @@ namespace Server.Services
             }
         }
 
-        private class ProcessItem
+        internal class ProcessItem
         {
             public string ProcessName { get; set; } = string.Empty;
             public int Id { get; set; }
