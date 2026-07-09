@@ -48,3 +48,6 @@ app.MapSessionEndpoints();
 HelperLifecycleService.RegisterAndStartHelper();
 
 app.Run();
+
+// WebApplicationFactory<Program> がテストプロジェクトからアクセスするために必要
+public partial class Program { }
