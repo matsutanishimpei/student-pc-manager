@@ -36,6 +36,8 @@ namespace client
 
         private async Task LoadProcessesAsync()
         {
+            ExcludeListManager.Load(); // Reload list to capture manual edits
+
             Dispatcher.Invoke(() =>
             {
                 StatusTextBlock.Text = "プロセス情報を更新中...";
@@ -53,6 +55,11 @@ namespace client
                     var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
                     var processes = await response.Content.ReadFromJsonAsync<List<ProcessInfo>>(options);
                     
+                    if (processes != null)
+                    {
+                        processes.RemoveAll(p => ExcludeListManager.IsExcluded(p.ProcessName));
+                    }
+
                     Dispatcher.Invoke(() =>
                     {
                         ProcessListView.ItemsSource = processes;
@@ -213,9 +220,40 @@ namespace client
                 {
                     MessageBox.Show($"エラー: {ex.Message}", "例外発生", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
+            }
+        }
+
+        private async void ExcludeProcessMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            var selectedItem = ProcessListView.SelectedItem as ProcessInfo;
+            if (selectedItem != null)
+            {
+                ExcludeListManager.Add(selectedItem.ProcessName);
+                MessageBox.Show($"プロセス '{selectedItem.ProcessName}' を除外リストに追加しました。次回更新時から非表示になります。", "情報", MessageBoxButton.OK, MessageBoxImage.Information);
+                await LoadProcessesAsync(); // Refresh immediately
+            }
+        }
+
+        private void EditExclusionsButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                ExcludeListManager.Save(); // Ensure directory & file exist
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "notepad.exe",
+                    Arguments = $"\"{ExcludeListManager.GetFilePath()}\"",
+                    UseShellExecute = true
+                };
+                System.Diagnostics.Process.Start(psi);
+                MessageBox.Show("除外リストファイル（テキスト）を開きました。除外したいプロセス名を入力して保存してください。保存後、「プロセス更新」ボタンを押すと反映されます。", "除外リストの編集", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"ファイルの起動に失敗しました: {ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
     }
-}
 
     public class ProcessInfo
     {

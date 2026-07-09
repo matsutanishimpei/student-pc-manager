@@ -90,7 +90,10 @@
                 <TextBlock Text="対象PC: " FontSize="16" FontWeight="Bold" Foreground="#A1A1AA"/>
                 <TextBlock x:Name="TargetPcTextBlock" Text="Loading..." FontSize="16" FontWeight="Bold" Foreground="#F4F4F5"/>
             </StackPanel>
-            <Button Grid.Column="1" Content="プロセス更新" Click="RefreshButton_Click"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button Content="除外設定..." Style="{StaticResource SecondaryButton}" Click="EditExclusionsButton_Click" Margin="0,0,8,0"/>
+                <Button Content="プロセス更新" Click="RefreshButton_Click"/>
+            </StackPanel>
         </Grid>
 
         <!-- Split Grid for processes and screenshot -->
@@ -103,6 +106,11 @@
 
             <!-- LEFT: Process ListView -->
             <ListView x:Name="ProcessListView" Grid.Column="0">
+                <ListView.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="このプロセス名を除外リストに追加" Click="ExcludeProcessMenuItem_Click"/>
+                    </ContextMenu>
+                </ListView.ContextMenu>
                 <ListView.View>
                     <GridView>
                         <GridViewColumn Header="PID" DisplayMemberBinding="{Binding Id}" Width="80"/>
