@@ -782,6 +782,56 @@ namespace client
             }
         }
 
+        private void ExportStudentNamesButton_Click(object sender, RoutedEventArgs e)
+        {
+            var saveFileDialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "CSVファイル (*.csv)|*.csv|テキストファイル (*.txt)|*.txt|すべてのファイル (*.*)|*.*",
+                Title = "学生名割り当てCSVのエクスポート",
+                FileName = "student_pc_mapping.csv"
+            };
+
+            if (saveFileDialog.ShowDialog() != true) return;
+
+            try
+            {
+                System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+                var encoding = System.Text.Encoding.GetEncoding(932);
+
+                var csvLines = new System.Collections.Generic.List<string>
+                {
+                    "キー(IPまたはPC名),学生名,IPアドレス,PC名,グループ"
+                };
+
+                foreach (var pc in PcList)
+                {
+                    string escapeCsv(string text)
+                    {
+                        if (string.IsNullOrEmpty(text)) return string.Empty;
+                        if (text.Contains(",") || text.Contains("\"") || text.Contains("\r") || text.Contains("\n"))
+                        {
+                            return $"\"{text.Replace("\"", "\"\"")}\"";
+                        }
+                        return text;
+                    }
+
+                    string key = !string.IsNullOrEmpty(pc.MachineName) ? pc.MachineName : pc.IpAddress;
+                    string student = pc.StudentName;
+
+                    csvLines.Add($"{escapeCsv(key)},{escapeCsv(student)},{escapeCsv(pc.IpAddress)},{escapeCsv(pc.MachineName)},{escapeCsv(pc.Group)}");
+                }
+
+                File.WriteAllLines(saveFileDialog.FileName, csvLines, encoding);
+                Log($"CSVエクスポート完了: {saveFileDialog.FileName} に書き出しました。");
+                MessageBox.Show("エクスポートが完了しました。", "完了", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                Log($"CSVエクスポートエラー: {ex.Message}");
+                MessageBox.Show($"CSVのエクスポート中にエラーが発生しました:\n{ex.Message}", "エラー", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
         private void UpdateMacAddressesButton_Click(object sender, RoutedEventArgs e)
         {
             var targets = PcList.Where(p => p.IsSelected).ToList();
