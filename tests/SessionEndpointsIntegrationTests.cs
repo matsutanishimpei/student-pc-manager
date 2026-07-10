@@ -103,6 +103,29 @@ public class TestWebAppFactory : WebApplicationFactory<Program>
     }
 }
 
+public class ApiSignatureHandler : DelegatingHandler
+{
+    private readonly string _apiKey;
+
+    public ApiSignatureHandler(string apiKey)
+    {
+        _apiKey = apiKey;
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, System.Threading.CancellationToken cancellationToken)
+    {
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        var method = request.Method.Method;
+        var path = request.RequestUri?.LocalPath ?? "/";
+
+        var signature = Share.Security.ApiSignature.Generate(_apiKey, timestamp, method, path);
+        request.Headers.Add("X-API-TIMESTAMP", timestamp);
+        request.Headers.Add("X-API-SIGNATURE", signature);
+
+        return base.SendAsync(request, cancellationToken);
+    }
+}
+
 public class SessionEndpointsIntegrationTests : IClassFixture<TestWebAppFactory>
 {
     private readonly TestWebAppFactory _factory;
@@ -111,9 +134,7 @@ public class SessionEndpointsIntegrationTests : IClassFixture<TestWebAppFactory>
     public SessionEndpointsIntegrationTests(TestWebAppFactory factory)
     {
         _factory = factory;
-        _client = factory.CreateClient();
-        // Add the test API key to all requests by default
-        _client.DefaultRequestHeaders.Add("X-API-KEY", factory.TestApiKey);
+        _client = factory.CreateDefaultClient(new ApiSignatureHandler(factory.TestApiKey));
     }
 
     private HttpClient CreateUnauthenticatedClient()

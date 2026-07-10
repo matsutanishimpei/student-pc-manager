@@ -1,0 +1,73 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: write
+
+jobs:
+  # 1. 自動テストジョブ (CI)
+  test:
+    runs-on: windows-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build
+      run: dotnet build --no-restore --configuration Release
+
+    - name: Run Tests
+      run: dotnet test --no-build --configuration Release --verbosity normal
+
+  # 2. リリースパッケージビルド＆ドラフト作成 (CD, タグプッシュ時のみ実行)
+  release:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Build Release (Publish)
+      shell: pwsh
+      run: |
+        ./build-release.ps1
+
+    - name: Package Client (Zip)
+      shell: pwsh
+      run: |
+        Compress-Archive -Path "publish/client/*" -DestinationPath "sendCMD_client_${{ github.ref_name }}.zip" -Force
+
+    - name: Package Server & Helper (Zip)
+      shell: pwsh
+      run: |
+        Compress-Archive -Path "publish/server/*" -DestinationPath "sendCMD_server_${{ github.ref_name }}.zip" -Force
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          sendCMD_client_${{ github.ref_name }}.zip
+          sendCMD_server_${{ github.ref_name }}.zip
+        draft: true
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

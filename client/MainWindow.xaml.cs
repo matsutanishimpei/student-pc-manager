@@ -266,7 +266,7 @@ namespace client
                         {
                             Content = JsonContent.Create(reqObj)
                         };
-                        request.Headers.Add("X-API-KEY", apiKey);
+                        request.AddApiSignature(apiKey);
 
                         var response = await httpClient.SendAsync(request);
                         if (response.IsSuccessStatusCode)
@@ -341,7 +341,7 @@ namespace client
                             {
                                 Content = content
                             };
-                            uploadRequest.Headers.Add("X-API-KEY", apiKey);
+                            uploadRequest.AddApiSignature(apiKey);
 
                             var uploadResponse = await httpClient.SendAsync(uploadRequest);
                             if (!uploadResponse.IsSuccessStatusCode)
@@ -389,7 +389,7 @@ namespace client
                             {
                                 Content = JsonContent.Create(execReqObj)
                             };
-                            execRequest.Headers.Add("X-API-KEY", apiKey);
+                            execRequest.AddApiSignature(apiKey);
 
                             var execResponse = await httpClient.SendAsync(execRequest);
                             if (execResponse.IsSuccessStatusCode)

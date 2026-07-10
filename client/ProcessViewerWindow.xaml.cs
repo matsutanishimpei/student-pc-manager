@@ -47,7 +47,7 @@ namespace client
             try
             {
                 var request = new HttpRequestMessage(HttpMethod.Get, $"http://{_pcAddress}/api/processes");
-                request.Headers.Add("X-API-KEY", _apiKey);
+                request.AddApiSignature(_apiKey);
 
                 var response = await httpClient.SendAsync(request);
                 if (response.IsSuccessStatusCode)
@@ -94,7 +94,7 @@ namespace client
             try
             {
                 var request = new HttpRequestMessage(HttpMethod.Get, $"http://{_pcAddress}/api/screenshot");
-                request.Headers.Add("X-API-KEY", _apiKey);
+                request.AddApiSignature(_apiKey);
 
                 var response = await httpClient.SendAsync(request);
                 if (response.IsSuccessStatusCode)
@@ -195,7 +195,7 @@ namespace client
                     {
                         Content = JsonContent.Create(reqObj)
                     };
-                    request.Headers.Add("X-API-KEY", _apiKey);
+                    request.AddApiSignature(_apiKey);
 
                     var response = await httpClient.SendAsync(request);
                     if (response.IsSuccessStatusCode)
