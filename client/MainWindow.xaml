@@ -291,7 +291,7 @@
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
                 <TextBlock Text="API認証キー:" VerticalAlignment="Center" Margin="0,0,10,0" FontSize="14" FontWeight="SemiBold"/>
-                <TextBox x:Name="ApiKeyTextBox" Grid.Column="1" Text="5c3e7f41-0f73-455b-b9d9-482470724653" TextChanged="ApiKeyTextBox_TextChanged"/>
+                <TextBox x:Name="ApiKeyTextBox" Grid.Column="1" Text="" TextChanged="ApiKeyTextBox_TextChanged"/>
             </Grid>
 
             <!-- Action Tabs -->

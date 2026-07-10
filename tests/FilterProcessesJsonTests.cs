@@ -227,4 +227,39 @@ public class FilterProcessesJsonTests
         Assert.Contains(filtered, p => p.ProcessName == "notepad");
         Assert.Contains(filtered, p => p.ProcessName == "explorer");
     }
+
+    // --- 非同期処理と実行関連のテスト ---
+
+    [Fact]
+    public async Task ExecuteCommandAsync_RunInUserSessionFalse_ExecutesCommand()
+    {
+        var executor = CreateExecutor();
+        var response = await executor.ExecuteCommandAsync("Write-Output 'hello-direct'", runInUserSession: false);
+
+        Assert.Equal(0, response.ExitCode);
+        Assert.NotNull(response.Stdout);
+        Assert.Contains("hello-direct", response.Stdout);
+    }
+
+    [Fact]
+    public async Task ExecuteCommandAsync_RunInUserSessionTrue_ExecutesCommand()
+    {
+        var executor = CreateExecutor();
+        var response = await executor.ExecuteCommandAsync("Write-Output 'hello-user-session'", runInUserSession: true);
+
+        // テストランナーの環境（ローカル開発環境）では SessionId != 0 であるため、
+        // ExecutePowerShellInUserSessionAsync が直接実行され、ファイル経由で結果が返る
+        Assert.Equal(0, response.ExitCode);
+        Assert.NotNull(response.Stdout);
+        Assert.Contains("hello-user-session", response.Stdout);
+    }
+
+    [Fact]
+    public async Task GetActiveAppAsync_RunsSuccessfully()
+    {
+        var executor = CreateExecutor();
+        // 実際のプロセス取得を呼び出す。例外がスローされずに何かしらの文字列（空でも可）が返ることを検証
+        var activeApps = await executor.GetActiveAppAsync();
+        Assert.NotNull(activeApps);
+    }
 }

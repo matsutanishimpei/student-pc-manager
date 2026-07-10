@@ -8,6 +8,8 @@ using Server.Middlewares;
 using Server.Services;
 using Share.Models;
 using System.Net;
+using System.Net.Http;
+using System.IO;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -59,9 +61,13 @@ public class TestWebAppFactory : WebApplicationFactory<Program>
 {
     public MockTaskExecutor MockExecutor { get; } = new();
     public string TestApiKey { get; } = "test-integration-key";
+    private string? _testUploadDir;
+    public string TestUploadDir => _testUploadDir ?? throw new InvalidOperationException("Upload directory not initialized");
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        _testUploadDir = Path.Combine(Path.GetTempPath(), "sendCMD_test_uploads_" + Guid.NewGuid().ToString("N"));
+
         builder.ConfigureServices(services =>
         {
             // Remove the real executor registration and replace with mock
@@ -74,9 +80,26 @@ public class TestWebAppFactory : WebApplicationFactory<Program>
         });
 
         builder.UseSetting("ApiKey", TestApiKey);
+        builder.UseSetting("UploadDirectory", _testUploadDir);
 
         // Prevent the real HelperLifecycleService from running
         builder.UseSetting("ASPNETCORE_ENVIRONMENT", "Testing");
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        base.Dispose(disposing);
+        if (disposing && _testUploadDir != null && Directory.Exists(_testUploadDir))
+        {
+            try
+            {
+                Directory.Delete(_testUploadDir, true);
+            }
+            catch
+            {
+                // Ignore cleanup errors in tests
+            }
+        }
     }
 }
 
@@ -250,5 +273,71 @@ public class SessionEndpointsIntegrationTests : IClassFixture<TestWebAppFactory>
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         string body = await response.Content.ReadAsStringAsync();
         Assert.Contains("Google Chrome, Notepad", body);
+    }
+
+    // --- /api/upload ---
+
+    [Fact]
+    public async Task UploadEndpoint_NonMultipartForm_ReturnsBadRequest()
+    {
+        var content = new StringContent("not-multipart");
+        var response = await _client.PostAsync("/api/upload", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UploadEndpoint_NoFile_ReturnsBadRequest()
+    {
+        var content = new MultipartFormDataContent();
+        content.Add(new StringContent("some-data"), "not-the-required-file-param");
+        var response = await _client.PostAsync("/api/upload", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UploadEndpoint_ValidFile_SavesFileAndReturnsOk()
+    {
+        var content = new MultipartFormDataContent();
+        var fileContent = new ByteArrayContent(Encoding.UTF8.GetBytes("fake file content"));
+        content.Add(fileContent, "file", "test_file.txt");
+
+        var response = await _client.PostAsync("/api/upload", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = await response.Content.ReadFromJsonAsync<UploadResponse>();
+        Assert.NotNull(result);
+        Assert.True(File.Exists(result!.FilePath));
+        Assert.Equal("test_file.txt", Path.GetFileName(result.FilePath));
+
+        // Content check
+        string fileText = await File.ReadAllTextAsync(result.FilePath);
+        Assert.Equal("fake file content", fileText);
+    }
+
+    // --- /api/mac ---
+
+    [Fact]
+    public async Task MacEndpoint_ReturnsOkOrNotFound()
+    {
+        var response = await _client.GetAsync("/api/mac");
+        
+        Assert.True(response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.NotFound,
+            $"Expected OK or NotFound, but got {response.StatusCode}");
+
+        if (response.StatusCode == HttpStatusCode.OK)
+        {
+            var json = await response.Content.ReadFromJsonAsync<MacAddressResponse>();
+            Assert.NotNull(json);
+            Assert.False(string.IsNullOrWhiteSpace(json!.MacAddress));
+            Assert.Matches(@"^[0-9A-FA-f]{2}(-[0-9A-FA-f]{2}){5}$", json.MacAddress);
+        }
+    }
+
+    private class UploadResponse
+    {
+        public string FilePath { get; set; } = "";
     }
 }

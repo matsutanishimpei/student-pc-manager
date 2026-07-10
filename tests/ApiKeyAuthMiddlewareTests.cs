@@ -8,7 +8,6 @@ namespace Tests;
 public class ApiKeyAuthMiddlewareTests
 {
     private const string ValidApiKey = "test-api-key-12345";
-    private const string DefaultApiKey = "5c3e7f41-0f73-455b-b9d9-482470724653";
 
     private static IConfiguration BuildConfig(string? apiKey = null)
     {
@@ -91,27 +90,15 @@ public class ApiKeyAuthMiddlewareTests
     }
 
     [Fact]
-    public async Task DefaultApiKey_UsedWhenConfigMissing()
+    public async Task MissingConfigApiKey_Returns401_EvenWithKeyInHeader()
     {
-        // When no ApiKey is configured, the hardcoded default should be used
+        // When no ApiKey is configured, any request to /api should be rejected
         var (statusCode, nextCalled) = await RunMiddleware(
             configApiKey: null,
             requestPath: "/api/info",
-            headerApiKey: DefaultApiKey);
+            headerApiKey: "some-key");
 
-        Assert.True(nextCalled, "Default API key should authenticate successfully");
-        Assert.Equal(200, statusCode);
-    }
-
-    [Fact]
-    public async Task DefaultApiKey_RejectsWrongKey_WhenConfigMissing()
-    {
-        var (statusCode, nextCalled) = await RunMiddleware(
-            configApiKey: null,
-            requestPath: "/api/info",
-            headerApiKey: "not-the-default-key");
-
-        Assert.False(nextCalled);
+        Assert.False(nextCalled, "Should NOT authenticate when config is missing ApiKey");
         Assert.Equal(401, statusCode);
     }
 
@@ -128,6 +115,33 @@ public class ApiKeyAuthMiddlewareTests
         var (statusCode, nextCalled) = await RunMiddleware(ValidApiKey, path, headerApiKey: null);
 
         Assert.False(nextCalled, $"Path {path} should require authentication");
+        Assert.Equal(401, statusCode);
+    }
+
+    [Fact]
+    public async Task ApiKey_IsCaseSensitive()
+    {
+        var (statusCode, nextCalled) = await RunMiddleware(ValidApiKey, "/api/exec", ValidApiKey.ToUpper());
+
+        Assert.False(nextCalled, "Auth should fail when API key case does not match");
+        Assert.Equal(401, statusCode);
+    }
+
+    [Fact]
+    public async Task EmptyConfigApiKey_Returns401_EvenWithEmptyHeader()
+    {
+        var (statusCode, nextCalled) = await RunMiddleware("", "/api/exec", "");
+
+        Assert.False(nextCalled, "Auth should fail when configured ApiKey is empty");
+        Assert.Equal(401, statusCode);
+    }
+
+    [Fact]
+    public async Task WhitespaceConfigApiKey_Returns401_EvenWithWhitespaceHeader()
+    {
+        var (statusCode, nextCalled) = await RunMiddleware("   ", "/api/exec", "   ");
+
+        Assert.False(nextCalled, "Auth should fail when configured ApiKey is whitespace only");
         Assert.Equal(401, statusCode);
     }
 }

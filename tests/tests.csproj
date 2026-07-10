@@ -1,11 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <UseWPF>true</UseWPF>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,6 +27,7 @@
   <ItemGroup>
     <ProjectReference Include="..\server\server.csproj" />
     <ProjectReference Include="..\share\share.csproj" />
+    <ProjectReference Include="..\client\client.csproj" />
   </ItemGroup>
 
 </Project>

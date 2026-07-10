@@ -157,16 +157,10 @@ namespace client
                 return;
             }
 
+            var generatedHosts = PcNameGenerator.GenerateNames(prefix, startNum, endNum, digits, portText);
             int count = 0;
-            for (int i = startNum; i <= endNum; i++)
+            foreach (var host in generatedHosts)
             {
-                string numStr = i.ToString().PadLeft(digits, '0');
-                string host = $"{prefix}{numStr}";
-                if (!string.IsNullOrEmpty(portText))
-                {
-                    host += $":{portText}";
-                }
-
                 if (!PcList.Any(p => p.IpAddress.Equals(host, StringComparison.OrdinalIgnoreCase)))
                 {
                     PcList.Add(new PcItem { IpAddress = host, Group = group, IsSelected = true });
@@ -774,31 +768,21 @@ namespace client
                     }
                 }
 
+                var parsedRows = StudentCsvProcessor.ParseCsv(lines);
                 int successCount = 0;
-                int lineCount = 0;
+                int lineCount = lines.Length;
 
-                foreach (var line in lines)
+                foreach (var row in parsedRows)
                 {
-                    lineCount++;
-                    if (string.IsNullOrWhiteSpace(line)) continue;
-
-                    var parts = line.Split(',');
-                    if (parts.Length < 2) continue;
-
-                    string key = parts[0].Trim().Trim('"', '\'');
-                    string studentName = parts[1].Trim().Trim('"', '\'');
-
-                    if (string.IsNullOrEmpty(key)) continue;
-
                     var matchedPc = PcList.FirstOrDefault(p => 
-                        p.IpAddress.Equals(key, StringComparison.OrdinalIgnoreCase) ||
-                        p.IpAddress.StartsWith(key + ":", StringComparison.OrdinalIgnoreCase) ||
-                        p.MachineName.Equals(key, StringComparison.OrdinalIgnoreCase)
+                        p.IpAddress.Equals(row.Key, StringComparison.OrdinalIgnoreCase) ||
+                        p.IpAddress.StartsWith(row.Key + ":", StringComparison.OrdinalIgnoreCase) ||
+                        p.MachineName.Equals(row.Key, StringComparison.OrdinalIgnoreCase)
                     );
 
                     if (matchedPc != null)
                     {
-                        matchedPc.StudentName = studentName;
+                        matchedPc.StudentName = row.StudentName;
                         successCount++;
                     }
                 }
@@ -837,20 +821,11 @@ namespace client
 
                 foreach (var pc in PcList)
                 {
-                    string escapeCsv(string text)
-                    {
-                        if (string.IsNullOrEmpty(text)) return string.Empty;
-                        if (text.Contains(",") || text.Contains("\"") || text.Contains("\r") || text.Contains("\n"))
-                        {
-                            return $"\"{text.Replace("\"", "\"\"")}\"";
-                        }
-                        return text;
-                    }
-
                     string key = !string.IsNullOrEmpty(pc.MachineName) ? pc.MachineName : pc.IpAddress;
                     string student = pc.StudentName;
 
-                    csvLines.Add($"{escapeCsv(key)},{escapeCsv(student)},{escapeCsv(pc.IpAddress)},{escapeCsv(pc.MachineName)},{escapeCsv(pc.Group)}");
+                    string csvRow = StudentCsvProcessor.BuildCsvRow(key, student, pc.IpAddress, pc.MachineName, pc.Group);
+                    csvLines.Add(csvRow);
                 }
 
                 File.WriteAllLines(saveFileDialog.FileName, csvLines, encoding);
@@ -1015,7 +990,7 @@ namespace client
             {
                 var config = new ClientConfig
                 {
-                    ApiKey = ApiKeyTextBox?.Text ?? "5c3e7f41-0f73-455b-b9d9-482470724653"
+                    ApiKey = ApiKeyTextBox?.Text ?? ""
                 };
                 string json = System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(ConfigFilePath, json);
@@ -1254,6 +1229,6 @@ namespace client
 
     public class ClientConfig
     {
-        public string ApiKey { get; set; } = "5c3e7f41-0f73-455b-b9d9-482470724653";
+        public string ApiKey { get; set; } = "";
     }
 }

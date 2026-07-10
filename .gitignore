@@ -18,3 +18,8 @@ pcs.json
 # OS specific files
 .DS_Store
 Thumbs.db
+
+# Large zip files and test artifacts
+*.zip
+[Tt]est[Rr]esults/
+scratch/

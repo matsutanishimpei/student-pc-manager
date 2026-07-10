@@ -7,21 +7,21 @@ namespace Server.Middlewares
     public class ApiKeyAuthMiddleware
     {
         private readonly RequestDelegate _next;
-        private readonly string _expectedApiKey;
+        private readonly string? _expectedApiKey;
         private const string ApiKeyHeaderName = "X-API-KEY";
-        private const string DefaultApiKey = "5c3e7f41-0f73-455b-b9d9-482470724653";
 
         public ApiKeyAuthMiddleware(RequestDelegate next, IConfiguration configuration)
         {
             _next = next;
-            _expectedApiKey = configuration["ApiKey"] ?? DefaultApiKey;
+            _expectedApiKey = configuration["ApiKey"];
         }
 
         public async Task InvokeAsync(HttpContext context)
         {
             if (context.Request.Path.StartsWithSegments("/api"))
             {
-                if (!context.Request.Headers.TryGetValue(ApiKeyHeaderName, out var extractedApiKey) ||
+                if (string.IsNullOrWhiteSpace(_expectedApiKey) ||
+                    !context.Request.Headers.TryGetValue(ApiKeyHeaderName, out var extractedApiKey) ||
                     extractedApiKey != _expectedApiKey)
                 {
                     context.Response.StatusCode = 401; // Unauthorized
