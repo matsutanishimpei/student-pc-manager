@@ -1,39 +1,87 @@
-# sendCMD 開発・貢献ガイドライン
+# sendCMD 開発ガイド
 
-本プロジェクトに機能追加や修正を行う際は、以下の実装ルールおよび制約事項を必ず遵守してください。
+この文書は、保守時に現在の安全性、文字コード互換性、モジュール分割を崩さないためのルールをまとめたものです。
 
----
+## 開発環境
 
-## 1. セキュリティと認証キーの管理ルール
-*   **ソースコード内の APIKey は常に空にする**
-    *   セキュリティ上のハードコード防止のため、リポジトリに配置する `server/appsettings.json` および `client/MainWindow.xaml.cs` (ClientConfig) の `ApiKey` の初期値は必ず空文字列（`""`）に保ってください。
-*   **リリースビルド時の動的注入**
-    *   配布パッケージにデフォルトのAPIキーを注入する処理は、すべて `build-release.ps1` 内で自動化されています。ビルド成果物をローカルで手動作成する際は、直接ファイルを書き換えるのではなく必ずこのビルドスクリプトを実行してください。
-*   **認証方式（HMAC-SHA256 署名）**
-    *   API通信時には `X-API-TIMESTAMP` と `X-API-SIGNATURE` を用いた署名検証が行われます。クライアント側で新規APIを追加・呼び出す際は、必ず `request.AddApiSignature(apiKey)` 拡張メソッドを使用してください。
+- Windows 10/11またはWindows Server
+- .NET 8 SDK
+- WPFをビルドできるWindows環境
 
-## 2. Windows サービスおよびセッション管理の制約 (SYSTEM権限)
-*   **Session 0 隔離の回避**
-    *   生徒PC側サービス（`server.exe`）は SYSTEM アカウント（Session 0）で動作するため、画面キャプチャの取得やウィンドウタイトルの取得などの対話型操作を直接実行できません。
-    *   これらのGUI依存操作を追加する際は、直接実行せず必ず `InteractiveProcessHelper.RunInUserSession` を使用して、ログインユーザーのセッション（Session 1 等）でプロセスを実行するように実装してください。
-*   **ファイルパスとアクセス権限**
-    *   SYSTEM アカウントと通常ユーザーの双方が読み書きできるようにするため、一時ファイル、出力バッファ、スクリプトファイルなどは必ず `C:\Users\Public\` 配下に作成してください（`Path.GetTempPath()` は SYSTEM環境下で `C:\Windows\Temp` を指すため使用禁止）。
+変更前後に次を実行してください。
 
-## 3. 文字コードとバッチファイル (Shift_JIS の厳守)
-*   **セットアップ用バッチファイルのエンコーディング**
-    *   `install.bat` および `uninstall.bat` は、日本語版 Windows のコマンドプロンプトで文字化けしないよう、必ず **`Shift_JIS (CP932)`** エンコードで保存してください。
-    *   バッチファイル内で `chcp 65001`（UTF-8への変更）を実行しないようにしてください。
+```powershell
+dotnet restore
+dotnet build --configuration Release
+dotnet test --no-build --configuration Release
+```
 
-## 4. 自動テストおよび CI/CD (GitHub Actions)
-*   **テストの追加要件**
-    *   共有ロジックやクライアント側ロジックを追加した際は、`tests/` プロジェクトに対応する xUnit テストを作成してください。
-    *   APIに影響を与える変更を行った場合は、`SessionEndpointsIntegrationTests.cs` の結合テストを実行し、認証エラーが発生しないか確認してください。
-*   **CI実行環境の制約 (Windowsランナーの維持)**
-    *   教員アプリは WPF (`net8.0-windows` / `UseWPF`) を使用しているため、GitHub Actions のランナーは Linux (`ubuntu-latest`) ではビルドエラーになります。`.github/workflows/ci-cd.yml` のジョブは必ず **`runs-on: windows-latest`** を維持してください。
+## 責務の分け方
 
-## 5. リリースの手順
-本プロジェクトの公式リリースパッケージは、タグプッシュ時に GitHub Actions によって自動生成（下書き保存）されます。
-1.  リリースする際は、事前に `client/MainWindow.xaml` にハードコードされているバージョン情報（タイトルバーおよび表示ラベル）を新しいバージョン（例: `v2.1.1`）に書き換えてコミット・プッシュします。
-2.  対象のコミットに対して `git tag v2.1.1` などのバージョンタグを作成します。
-3.  タグをリモートにプッシュします (`git push origin v2.1.1`)。
-4.  自動的にビルドが走り、GitHub の Releases ページに `client` / `server` の個別 zip アセットが添付された「下書きリリース」が生成されます。内容を確認し、問題なければ公開してください。
+- `MainWindow.xaml.cs`: 画面イベントと表示状態の調整だけを担当します。
+- `RemotePcClient.cs`: 署名付きHTTP通信、タイムアウト、応答処理を担当します。
+- `ClientDataStore.cs`: `pcs.json`と`config.json`の読み書きを担当します。
+- `OperationLogger.cs`: クライアント操作ログを担当します。
+- `StudentCsvProcessor.cs`: CSV構文と文字コード判定を担当します。
+- `WakeOnLanService.cs`: Wake on LANを担当します。
+- `server/Endpoints/`: API入力検証と応答を担当します。
+- `server/Services/`: SYSTEMまたはログインユーザーでの処理実行を担当します。
+- `share/`: クライアントとサーバーの共通契約だけを置きます。
+
+画面から直接HTTP通信やファイル保存を増やさず、対応する担当クラスへ追加してください。
+
+## 認証と秘密情報
+
+- リポジトリ内の`server/appsettings.json`の`ApiKey`は空文字列を維持します。
+- 新しいAPIも`/api`配下に置き、`AddApiSignature(apiKey)`で署名してください。
+- 署名はAPIキー、UTCタイムスタンプ、HTTPメソッド、パスから生成します。
+- APIキーをヘッダー、URL、ログ、例外メッセージへ平文で出力しないでください。
+- 認証時刻の許容差は5分です。変更する場合はテストと両マニュアルを同時に更新してください。
+- `build-release.ps1`は配布物へ初期キーを注入します。公開環境では教室ごとのキーへ変更する運用を維持してください。
+
+## 入力とファイルの安全性
+
+- PowerShellコマンドの32,768文字上限を維持してください。
+- アップロード上限は`MaxUploadBytes`から取得し、通信層とフォーム処理の両方に適用します。
+- 利用者が送ったファイル名を保存パスへ直接使用しないでください。
+- `Path.GetFileName`、不正文字の置換、一意な接尾辞、保存先配下の検証、`FileMode.CreateNew`を維持してください。
+- SYSTEMとログインユーザーの双方が使う一時ファイルは、用途を限定して`C:\Users\Public\`配下へ置きます。
+
+## 文字コード
+
+- 通常のソース、Markdown、JSON、PowerShellはUTF-8で保存します。`.editorconfig`を優先してください。
+- `install.bat`と`uninstall.bat`はCP932です。UTF-8へ変換したり、`chcp 65001`を追加したりしないでください。
+- JSONと操作ログはBOMなしUTF-8で保存します。
+- CSV読み込みはUTF-8 BOM付き、UTF-16 LE/BE、厳密なUTF-8、CP932フォールバックの順序を維持します。
+- CSV出力はExcel互換のためCP932です。変更する場合は利用者向けの選択肢と移行手順を用意してください。
+- 文字化けの確認には日本語のPC名、学生名、カンマ、二重引用符を含むテストデータを使います。
+
+## Windowsセッション
+
+- サーバーはSYSTEMのSession 0で動作します。
+- 画面、ウィンドウタイトル、MSIX/APPXなどログインユーザー依存の処理は、既存の対話セッション実行機構を使います。
+- UIスレッドのWPFコントロールをバックグラウンド処理から直接参照しないでください。値を先に取得してから処理へ渡します。
+
+## テスト
+
+- 共通処理や保存処理を変更したら、対応する単体テストを追加します。
+- APIを変更したら`SessionEndpointsIntegrationTests`と認証テストを実行します。
+- CSVを変更したらUTF-8、UTF-16、CP932、引用符付きフィールドを確認します。
+- ファイル配布を変更したらサイズ超過、空ファイル、不正ファイル名、重複名、保存先逸脱を確認します。
+- CIはWPF対応のため`windows-latest`を維持します。
+
+## 文書更新
+
+利用者に見える挙動、設定値、制限、保存場所、認証、文字コード、リリース手順を変えた場合は、同じ変更内で該当文書と`CHANGELOG.md`を更新してください。
+
+## リリース
+
+1. `client/MainWindow.xaml`のタイトルと表示バージョンを更新します。
+2. `CHANGELOG.md`へ変更内容と運用上の注意を追記します。
+3. Release構成でビルドと全テストを実行します。
+4. 変更を`main`へ取り込みます。
+5. `v2.1.2`のようなタグを対象コミットへ付け、`origin`へpushします。
+6. GitHub Actionsがテスト、配布物作成、ZIP添付、下書きRelease作成を行います。
+7. 下書きの説明と添付物を確認してから公開します。
+
+タグを削除・付け直してリリースを上書きする運用は避け、新しい修正版タグを作成してください。
