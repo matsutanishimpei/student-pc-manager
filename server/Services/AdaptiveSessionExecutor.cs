@@ -168,12 +168,18 @@ namespace Server.Services
             var result = new CommandResponse();
             try
             {
+                const string utf8Setup = "$utf8 = [System.Text.UTF8Encoding]::new($false); " +
+                    "[Console]::InputEncoding = $utf8; [Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8; ";
+
                 using var process = new Process();
                 process.StartInfo.FileName = "powershell.exe";
                 process.StartInfo.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command -";
                 process.StartInfo.RedirectStandardInput = true;
                 process.StartInfo.RedirectStandardOutput = true;
                 process.StartInfo.RedirectStandardError = true;
+                process.StartInfo.StandardInputEncoding = new UTF8Encoding(false);
+                process.StartInfo.StandardOutputEncoding = new UTF8Encoding(false);
+                process.StartInfo.StandardErrorEncoding = new UTF8Encoding(false);
                 process.StartInfo.UseShellExecute = false;
                 process.StartInfo.CreateNoWindow = true;
 
@@ -183,7 +189,7 @@ namespace Server.Services
                 {
                     if (sw.BaseStream.CanWrite)
                     {
-                        sw.WriteLine(command);
+                        sw.WriteLine(utf8Setup + command);
                     }
                 }
 

@@ -1,15 +1,11 @@
 using System;
 using System.IO;
 using System.Net.Http;
-using System.Net.Http.Json;
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using Microsoft.Win32;
-using Share.Models;
-using System.Runtime.CompilerServices;
 
 namespace client
 {
@@ -19,12 +15,12 @@ namespace client
         private static readonly HttpClient httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
         private static readonly HttpClient monitoringHttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
 
-        private static readonly string PcsFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "pcs.json");
+        private readonly ClientDataStore _dataStore = new(AppDomain.CurrentDomain.BaseDirectory);
+        private readonly OperationLogger _operationLogger = new(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+        private readonly RemotePcClient _remotePcClient = new(httpClient, monitoringHttpClient);
 
         public ObservableCollection<MonitorItem> MonitorList { get; set; } = new ObservableCollection<MonitorItem>();
         private System.Windows.Threading.DispatcherTimer? _monitorTimer;
-
-        private static readonly string ConfigFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
 
         public MainWindow()
         {
@@ -65,31 +61,18 @@ namespace client
                 LogTextBox.ScrollToEnd();
             }));
 
-            try
-            {
-                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "sendCMD");
-                if (!Directory.Exists(dir))
-                {
-                    Directory.CreateDirectory(dir);
-                }
-                string logPath = Path.Combine(dir, "client_operation_log.txt");
-                File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}");
-            }
-            catch {}
+            try { _operationLogger.Write(message); }
+            catch { }
         }
 
         private ObservableCollection<PcItem> LoadPcList()
         {
             try
             {
-                if (File.Exists(PcsFilePath))
+                var list = _dataStore.LoadPcList();
+                if (list != null)
                 {
-                    string json = File.ReadAllText(PcsFilePath);
-                    var list = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.List<PcItem>>(json);
-                    if (list != null)
-                    {
-                        return new ObservableCollection<PcItem>(list);
-                    }
+                    return new ObservableCollection<PcItem>(list);
                 }
             }
             catch (Exception ex)
@@ -108,9 +91,7 @@ namespace client
         {
             try
             {
-                var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
-                string json = System.Text.Json.JsonSerializer.Serialize(PcList, options);
-                File.WriteAllText(PcsFilePath, json);
+                _dataStore.SavePcList(PcList);
             }
             catch (Exception ex)
             {
@@ -261,34 +242,15 @@ namespace client
                     Log($"[{target.IpAddress}] コマンド実行中...");
                     try
                     {
-                        var reqObj = new CommandRequest { Command = command, RunInUserSession = true };
-                        var request = new HttpRequestMessage(HttpMethod.Post, $"http://{target.IpAddress}/api/exec")
+                        var result = await _remotePcClient.ExecuteCommandAsync(target.IpAddress, apiKey, command, true);
+                        Log($"[{target.IpAddress}] 実行完了。ExitCode: {result.ExitCode}");
+                        if (!string.IsNullOrEmpty(result.Stdout))
                         {
-                            Content = JsonContent.Create(reqObj)
-                        };
-                        request.AddApiSignature(apiKey);
-
-                        var response = await httpClient.SendAsync(request);
-                        if (response.IsSuccessStatusCode)
-                        {
-                            var result = await response.Content.ReadFromJsonAsync<CommandResponse>();
-                            if (result != null)
-                            {
-                                Log($"[{target.IpAddress}] 実行完了。ExitCode: {result.ExitCode}");
-                                if (!string.IsNullOrEmpty(result.Stdout))
-                                {
-                                    Log($"[{target.IpAddress}] 出力 (STDOUT):{Environment.NewLine}{result.Stdout.Trim()}");
-                                }
-                                if (!string.IsNullOrEmpty(result.Stderr))
-                                {
-                                    Log($"[{target.IpAddress}] エラー出力 (STDERR):{Environment.NewLine}{result.Stderr.Trim()}");
-                                }
-                            }
+                            Log($"[{target.IpAddress}] 出力 (STDOUT):{Environment.NewLine}{result.Stdout.Trim()}");
                         }
-                        else
+                        if (!string.IsNullOrEmpty(result.Stderr))
                         {
-                            string errContent = await response.Content.ReadAsStringAsync();
-                            Log($"[{target.IpAddress}] 失敗。HTTPステータス: {response.StatusCode}。詳細: {errContent}");
+                            Log($"[{target.IpAddress}] エラー出力 (STDERR):{Environment.NewLine}{result.Stderr.Trim()}");
                         }
                     }
                     catch (Exception ex)
@@ -317,6 +279,7 @@ namespace client
 
             string apiKey = ApiKeyTextBox.Text;
             bool executeAfterUpload = ExecuteAfterUploadCheckBox.IsChecked == true;
+            bool runAsUser = RunAsUserCheckBox.IsChecked == true;
             string runArgs = ExecutionArgsTextBox.Text.Trim();
             string fileName = Path.GetFileName(localPath);
 
@@ -329,32 +292,8 @@ namespace client
                     Log($"[{target.IpAddress}] ファイルアップロード中...");
                     try
                     {
-                        string remotePath = "";
-                        
-                        // 1. ファイルをアップロード
-                        using (var content = new MultipartFormDataContent())
-                        using (var fileStream = File.OpenRead(localPath))
-                        using (var streamContent = new StreamContent(fileStream))
-                        {
-                            content.Add(streamContent, "file", fileName);
-                            var uploadRequest = new HttpRequestMessage(HttpMethod.Post, $"http://{target.IpAddress}/api/upload")
-                            {
-                                Content = content
-                            };
-                            uploadRequest.AddApiSignature(apiKey);
-
-                            var uploadResponse = await httpClient.SendAsync(uploadRequest);
-                            if (!uploadResponse.IsSuccessStatusCode)
-                            {
-                                string errContent = await uploadResponse.Content.ReadAsStringAsync();
-                                Log($"[{target.IpAddress}] アップロード失敗。HTTPステータス: {uploadResponse.StatusCode}。詳細: {errContent}");
-                                return;
-                            }
-
-                            var uploadResult = await uploadResponse.Content.ReadFromJsonAsync<UploadResult>();
-                            remotePath = uploadResult?.FilePath ?? "";
-                            Log($"[{target.IpAddress}] アップロード完了。保存先: {remotePath}");
-                        }
+                        string remotePath = await _remotePcClient.UploadFileAsync(target.IpAddress, apiKey, localPath);
+                        Log($"[{target.IpAddress}] アップロード完了。保存先: {remotePath}");
 
                         // 2. アップロード後の実行処理
                         if (executeAfterUpload && !string.IsNullOrEmpty(remotePath))
@@ -380,38 +319,20 @@ namespace client
                                 installCmd = $"Start-Process \"{remotePath}\" -ArgumentList \"{runArgs}\" -Wait -PassThru";
                             }
 
-                            var execReqObj = new CommandRequest 
-                            { 
-                                Command = installCmd,
-                                RunInUserSession = (ext == ".msix" || ext == ".appx") || (RunAsUserCheckBox.IsChecked == true)
-                            };
-                            var execRequest = new HttpRequestMessage(HttpMethod.Post, $"http://{target.IpAddress}/api/exec")
+                            bool runInUserSession = ext is ".msix" or ".appx" || runAsUser;
+                            var result = await _remotePcClient.ExecuteCommandAsync(
+                                target.IpAddress,
+                                apiKey,
+                                installCmd,
+                                runInUserSession);
+                            Log($"[{target.IpAddress}] リモート実行完了。ExitCode: {result.ExitCode}");
+                            if (!string.IsNullOrEmpty(result.Stdout))
                             {
-                                Content = JsonContent.Create(execReqObj)
-                            };
-                            execRequest.AddApiSignature(apiKey);
-
-                            var execResponse = await httpClient.SendAsync(execRequest);
-                            if (execResponse.IsSuccessStatusCode)
-                            {
-                                var execResult = await execResponse.Content.ReadFromJsonAsync<CommandResponse>();
-                                if (execResult != null)
-                                {
-                                    Log($"[{target.IpAddress}] リモート実行完了。ExitCode: {execResult.ExitCode}");
-                                    if (!string.IsNullOrEmpty(execResult.Stdout))
-                                    {
-                                        Log($"[{target.IpAddress}] 出力 (STDOUT):{Environment.NewLine}{execResult.Stdout.Trim()}");
-                                    }
-                                    if (!string.IsNullOrEmpty(execResult.Stderr))
-                                    {
-                                        Log($"[{target.IpAddress}] エラー出力 (STDERR):{Environment.NewLine}{execResult.Stderr.Trim()}");
-                                    }
-                                }
+                                Log($"[{target.IpAddress}] 出力 (STDOUT):{Environment.NewLine}{result.Stdout.Trim()}");
                             }
-                            else
+                            if (!string.IsNullOrEmpty(result.Stderr))
                             {
-                                string errContent = await execResponse.Content.ReadAsStringAsync();
-                                Log($"[{target.IpAddress}] リモート実行要求に失敗しました。HTTP: {execResponse.StatusCode}。詳細: {errContent}");
+                                Log($"[{target.IpAddress}] エラー出力 (STDERR):{Environment.NewLine}{result.Stderr.Trim()}");
                             }
                         }
                     }
@@ -487,35 +408,27 @@ namespace client
                 {
                     try
                     {
-                        var request = new HttpRequestMessage(HttpMethod.Get, $"http://{target.IpAddress}/api/activeapp");
-                        request.Headers.Add("X-API-KEY", apiKey);
-
-                        var response = await monitoringHttpClient.SendAsync(request);
-                        if (response.IsSuccessStatusCode)
+                        string activeApp = await _remotePcClient.GetActiveAppAsync(target.IpAddress, apiKey);
+                        if (string.IsNullOrEmpty(activeApp))
                         {
-                            var result = await response.Content.ReadFromJsonAsync<ActiveAppResponse>();
-                            string activeApp = result?.ActiveApp ?? "";
-                            if (string.IsNullOrEmpty(activeApp))
-                            {
-                                activeApp = "(アクティブウィンドウなし / アイドル)";
-                            }
+                            activeApp = "(アクティブウィンドウなし / アイドル)";
+                        }
 
-                            Dispatcher.Invoke(() =>
-                            {
-                                item.Status = "オンライン";
-                                item.StatusColor = System.Windows.Media.Brushes.Green;
-                                item.ActiveApp = activeApp;
-                            });
-                        }
-                        else
+                        Dispatcher.Invoke(() =>
                         {
-                            Dispatcher.Invoke(() =>
-                            {
-                                item.Status = "接続失敗";
-                                item.StatusColor = System.Windows.Media.Brushes.Red;
-                                item.ActiveApp = $"HTTP {response.StatusCode}";
-                            });
-                        }
+                            item.Status = "オンライン";
+                            item.StatusColor = System.Windows.Media.Brushes.Green;
+                            item.ActiveApp = activeApp;
+                        });
+                    }
+                    catch (RemotePcException ex)
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            item.Status = "接続失敗";
+                            item.StatusColor = System.Windows.Media.Brushes.Red;
+                            item.ActiveApp = $"HTTP {(int)ex.StatusCode}";
+                        });
                     }
                     catch (Exception ex)
                     {
@@ -644,33 +557,15 @@ namespace client
                 {
                     try
                     {
-                        string host = target.IpAddress;
-                        int colonIdx = host.IndexOf(':');
-                        if (colonIdx > 0)
+                        string machineName = await _remotePcClient.GetMachineNameAsync(target.IpAddress, apiKey);
+                        if (!string.IsNullOrEmpty(machineName))
                         {
-                            host = host.Substring(0, colonIdx);
-                        }
-
-                        var request = new HttpRequestMessage(HttpMethod.Get, $"http://{host}:5000/api/info");
-                        request.Headers.Add("X-API-KEY", apiKey);
-
-                        var response = await monitoringHttpClient.SendAsync(request);
-                        if (response.IsSuccessStatusCode)
-                        {
-                            var result = await response.Content.ReadFromJsonAsync<ServerInfoResponse>();
-                            if (result != null && !string.IsNullOrEmpty(result.MachineName))
+                            Dispatcher.Invoke(() =>
                             {
-                                Dispatcher.Invoke(() =>
-                                {
-                                    target.MachineName = result.MachineName;
-                                    Log($"[{target.IpAddress}] PC名を取得しました: {result.MachineName}");
-                                    SavePcList();
-                                });
-                            }
-                        }
-                        else
-                        {
-                            Log($"[{target.IpAddress}] PC名の取得に失敗しました。HTTP Status: {response.StatusCode}");
+                                target.MachineName = machineName;
+                                Log($"[{target.IpAddress}] PC名を取得しました: {machineName}");
+                                SavePcList();
+                            });
                         }
                     }
                     catch (Exception ex)
@@ -754,11 +649,7 @@ namespace client
 
             try
             {
-                // Register code pages provider for Shift-JIS support
-                System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
-                
-                var encoding = System.Text.Encoding.GetEncoding(932);
-                var lines = File.ReadAllLines(openFileDialog.FileName, encoding);
+                var lines = StudentCsvProcessor.ReadAllLines(openFileDialog.FileName, out string detectedEncoding);
 
                 if (clearChoice == MessageBoxResult.Yes)
                 {
@@ -788,7 +679,7 @@ namespace client
                 }
 
                 SavePcList();
-                Log($"CSVインポート完了: {lineCount}行中 {successCount}台のPCに学生名を割り当てました。");
+                Log($"CSVインポート完了 ({detectedEncoding}): {lineCount}行中 {successCount}台のPCに学生名を割り当てました。");
                 MessageBox.Show($"インポートが完了しました。\n\n割り当て成功: {successCount} 台", "インポート完了", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
@@ -857,33 +748,15 @@ namespace client
                 {
                     try
                     {
-                        string host = target.IpAddress;
-                        int colonIdx = host.IndexOf(':');
-                        if (colonIdx > 0)
+                        string macAddress = await _remotePcClient.GetMacAddressAsync(target.IpAddress, apiKey);
+                        if (!string.IsNullOrEmpty(macAddress))
                         {
-                            host = host.Substring(0, colonIdx);
-                        }
-
-                        var request = new HttpRequestMessage(HttpMethod.Get, $"http://{host}:5000/api/mac");
-                        request.Headers.Add("X-API-KEY", apiKey);
-
-                        var response = await monitoringHttpClient.SendAsync(request);
-                        if (response.IsSuccessStatusCode)
-                        {
-                            var result = await response.Content.ReadFromJsonAsync<MacAddressResponse>();
-                            if (result != null && !string.IsNullOrEmpty(result.MacAddress))
+                            Dispatcher.Invoke(() =>
                             {
-                                Dispatcher.Invoke(() =>
-                                {
-                                    target.MacAddress = result.MacAddress;
-                                    Log($"[{target.IpAddress}] MACアドレスを取得しました: {result.MacAddress}");
-                                    SavePcList();
-                                });
-                            }
-                        }
-                        else
-                        {
-                            Log($"[{target.IpAddress}] MACアドレスの取得に失敗しました。HTTP Status: {response.StatusCode}");
+                                target.MacAddress = macAddress;
+                                Log($"[{target.IpAddress}] MACアドレスを取得しました: {macAddress}");
+                                SavePcList();
+                            });
                         }
                     }
                     catch (Exception ex)
@@ -915,7 +788,7 @@ namespace client
 
                 try
                 {
-                    await SendWakeOnLanAsync(target.MacAddress);
+                    await WakeOnLanService.SendAsync(target.MacAddress);
                     Log($"[{target.IpAddress}] へWOL起動シグナル（Magic Packet）を送信しました。");
                     sendCount++;
                 }
@@ -931,47 +804,14 @@ namespace client
             }
         }
 
-        private static async Task SendWakeOnLanAsync(string macAddress)
-        {
-            string cleanMac = System.Text.RegularExpressions.Regex.Replace(macAddress, "[-:]", "");
-            if (cleanMac.Length != 12)
-            {
-                throw new ArgumentException("無効なMACアドレスフォーマットです。12桁の16進数である必要があります。");
-            }
-
-            byte[] macBytes = new byte[6];
-            for (int i = 0; i < 6; i++)
-            {
-                macBytes[i] = Convert.ToByte(cleanMac.Substring(i * 2, 2), 16);
-            }
-
-            byte[] packet = new byte[102];
-            for (int i = 0; i < 6; i++)
-            {
-                packet[i] = 0xFF;
-            }
-            for (int i = 0; i < 16; i++)
-            {
-                Buffer.BlockCopy(macBytes, 0, packet, 6 + i * 6, 6);
-            }
-
-            using var client = new System.Net.Sockets.UdpClient();
-            client.EnableBroadcast = true;
-            await client.SendAsync(packet, packet.Length, new System.Net.IPEndPoint(System.Net.IPAddress.Broadcast, 9));
-        }
-
         private void LoadConfig()
         {
             try
             {
-                if (File.Exists(ConfigFilePath))
+                var config = _dataStore.LoadConfig();
+                if (config != null && !string.IsNullOrEmpty(config.ApiKey))
                 {
-                    string json = File.ReadAllText(ConfigFilePath);
-                    var config = System.Text.Json.JsonSerializer.Deserialize<ClientConfig>(json);
-                    if (config != null && !string.IsNullOrEmpty(config.ApiKey))
-                    {
-                        ApiKeyTextBox.Text = config.ApiKey;
-                    }
+                    ApiKeyTextBox.Text = config.ApiKey;
                 }
                 else
                 {
@@ -992,8 +832,7 @@ namespace client
                 {
                     ApiKey = ApiKeyTextBox?.Text ?? ""
                 };
-                string json = System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(ConfigFilePath, json);
+                _dataStore.SaveConfig(config);
             }
             catch (Exception ex)
             {
@@ -1074,161 +913,4 @@ namespace client
         }
     }
 
-    public class PcItem : INotifyPropertyChanged
-    {
-        private string _ipAddress = string.Empty;
-        private string _machineName = string.Empty;
-        private string _macAddress = string.Empty;
-        private string _group = string.Empty;
-        private string _studentName = string.Empty;
-        private bool _isSelected = true;
-
-        public string IpAddress
-        {
-            get => _ipAddress;
-            set 
-            { 
-                _ipAddress = value; 
-                OnPropertyChanged(); 
-                OnPropertyChanged(nameof(DisplayName)); 
-            }
-        }
-
-        public string MachineName
-        {
-            get => _machineName;
-            set 
-            { 
-                _machineName = value; 
-                OnPropertyChanged(); 
-                OnPropertyChanged(nameof(DisplayName)); 
-            }
-        }
-
-        public string MacAddress
-        {
-            get => _macAddress;
-            set 
-            { 
-                _macAddress = value; 
-                OnPropertyChanged(); 
-                OnPropertyChanged(nameof(DisplayName)); 
-            }
-        }
-
-        public string Group
-        {
-            get => _group;
-            set 
-            { 
-                _group = value; 
-                OnPropertyChanged(); 
-                OnPropertyChanged(nameof(DisplayName)); 
-            }
-        }
-
-        public string StudentName
-        {
-            get => _studentName;
-            set 
-            { 
-                _studentName = value; 
-                OnPropertyChanged(); 
-                OnPropertyChanged(nameof(DisplayName)); 
-            }
-        }
-
-        public bool IsSelected
-        {
-            get => _isSelected;
-            set { _isSelected = value; OnPropertyChanged(); }
-        }
-
-        [System.Text.Json.Serialization.JsonIgnore]
-        public string DisplayName
-        {
-            get
-            {
-                string baseName = IpAddress;
-                if (!string.IsNullOrEmpty(StudentName))
-                {
-                    baseName = $"{StudentName} ({IpAddress})";
-                }
-                else if (!string.IsNullOrEmpty(MachineName) && !IpAddress.StartsWith(MachineName, StringComparison.OrdinalIgnoreCase))
-                {
-                    baseName = $"{IpAddress} ({MachineName})";
-                }
-
-                if (!string.IsNullOrEmpty(Group))
-                {
-                    baseName = $"[{Group}] {baseName}";
-                }
-
-                if (!string.IsNullOrEmpty(MacAddress))
-                {
-                    return $"{baseName} <{MacAddress}>";
-                }
-                return baseName;
-            }
-        }
-
-        public event PropertyChangedEventHandler? PropertyChanged;
-        protected void OnPropertyChanged([CallerMemberName] string? name = null)
-        {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
-        }
-    }
-
-    public class UploadResult
-    {
-        public string FilePath { get; set; } = string.Empty;
-    }
-
-    public class MonitorItem : INotifyPropertyChanged
-    {
-        private string _pcAddress = string.Empty;
-        private string _status = "未取得";
-        private string _activeApp = string.Empty;
-        private System.Windows.Media.Brush _statusColor = System.Windows.Media.Brushes.Gray;
-
-        public string PcAddress
-        {
-            get => _pcAddress;
-            set { _pcAddress = value; OnPropertyChanged(); }
-        }
-
-        public string Status
-        {
-            get => _status;
-            set { _status = value; OnPropertyChanged(); }
-        }
-
-        public string ActiveApp
-        {
-            get => _activeApp;
-            set { _activeApp = value; OnPropertyChanged(); }
-        }
-
-        public System.Windows.Media.Brush StatusColor
-        {
-            get => _statusColor;
-            set { _statusColor = value; OnPropertyChanged(); }
-        }
-
-        public event PropertyChangedEventHandler? PropertyChanged;
-        protected void OnPropertyChanged([CallerMemberName] string? name = null)
-        {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
-        }
-    }
-
-    public class ActiveAppResponse
-    {
-        public string ActiveApp { get; set; } = string.Empty;
-    }
-
-    public class ClientConfig
-    {
-        public string ApiKey { get; set; } = "";
-    }
 }

@@ -12,6 +12,7 @@ var options = new WebApplicationOptions
     ContentRootPath = AppContext.BaseDirectory
 };
 var builder = WebApplication.CreateBuilder(options);
+long maxUploadBytes = builder.Configuration.GetValue<long?>("MaxUploadBytes") ?? 524288000;
 
 // Windows サービスとしての有効期間を構成する
 builder.Host.UseWindowsService();
@@ -21,19 +22,24 @@ builder.WebHost.ConfigureKestrel(options =>
 {
     options.ListenAnyIP(5000);
     // 最大リクエストボディサイズを500MBに設定 (デフォルトは30MB)
-    options.Limits.MaxRequestBodySize = 524288000; 
+    options.Limits.MaxRequestBodySize = maxUploadBytes;
 });
 
 // マルチパートフォーム（ファイルアップロード）の上限を500MBに設定
 builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
 {
-    options.MultipartBodyLengthLimit = 524288000;
+    options.MultipartBodyLengthLimit = maxUploadBytes;
 });
 
 // DIコンテナにサービスを登録
 builder.Services.AddSingleton<IInteractiveTaskExecutor, AdaptiveSessionExecutor>();
 
 var app = builder.Build();
+
+if (string.IsNullOrWhiteSpace(builder.Configuration["ApiKey"]) && !app.Environment.IsEnvironment("Testing"))
+{
+    Log.Write("[Startup Warning] ApiKey is not configured. API requests will be rejected until ApiKey is set.");
+}
 
 // APIキー認証ミドルウェアの適用
 app.UseMiddleware<ApiKeyAuthMiddleware>();
