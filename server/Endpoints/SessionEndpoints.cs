@@ -12,6 +12,9 @@ namespace Server.Endpoints
 {
     public static class SessionEndpoints
     {
+        private const int MaxCommandLength = 32768;
+        private const long DefaultMaxUploadBytes = 524288000;
+
         public static void MapSessionEndpoints(this WebApplication app)
         {
             // PowerShellコマンド実行API
@@ -20,6 +23,11 @@ namespace Server.Endpoints
                 if (string.IsNullOrWhiteSpace(request.Command))
                 {
                     return Results.BadRequest(new CommandResponse { ExitCode = -1, Stderr = "Command is empty." });
+                }
+
+                if (request.Command.Length > MaxCommandLength)
+                {
+                    return Results.BadRequest(new CommandResponse { ExitCode = -1, Stderr = $"Command is too long. Max length is {MaxCommandLength} characters." });
                 }
 
                 var response = await executor.ExecuteCommandAsync(request.Command, request.RunInUserSession);
@@ -34,7 +42,16 @@ namespace Server.Endpoints
                     return Results.BadRequest("Expected a multipart form content type.");
                 }
 
-                var form = await request.ReadFormAsync();
+                IFormCollection form;
+                try
+                {
+                    form = await request.ReadFormAsync();
+                }
+                catch (InvalidDataException)
+                {
+                    return Results.Problem("The uploaded form data is too large or invalid.", statusCode: StatusCodes.Status413PayloadTooLarge);
+                }
+
                 var file = form.Files.GetFile("file");
 
                 if (file == null || file.Length == 0)
@@ -42,18 +59,33 @@ namespace Server.Endpoints
                     return Results.BadRequest("No file uploaded.");
                 }
 
+                long maxUploadBytes = configuration.GetValue<long?>("MaxUploadBytes") ?? DefaultMaxUploadBytes;
+                if (file.Length > maxUploadBytes)
+                {
+                    return Results.Problem($"File is too large. Max upload size is {maxUploadBytes} bytes.", statusCode: StatusCodes.Status413PayloadTooLarge);
+                }
+
                 string defaultUploadDir = "C:\\Users\\Public\\sendCMD_uploads";
                 string uploadDir = configuration["UploadDirectory"] ?? defaultUploadDir;
+                string? storedFileName = CreateSafeStoredFileName(file.FileName);
+
+                if (storedFileName == null)
+                {
+                    return Results.BadRequest("Invalid uploaded file name.");
+                }
 
                 try
                 {
-                    if (!Directory.Exists(uploadDir))
+                    string uploadRoot = Path.GetFullPath(uploadDir);
+                    Directory.CreateDirectory(uploadRoot);
+
+                    string filePath = Path.GetFullPath(Path.Combine(uploadRoot, storedFileName));
+                    if (!filePath.StartsWith(EnsureTrailingSeparator(uploadRoot), StringComparison.OrdinalIgnoreCase))
                     {
-                        Directory.CreateDirectory(uploadDir);
+                        return Results.BadRequest("Invalid uploaded file path.");
                     }
 
-                    string filePath = Path.Combine(uploadDir, file.FileName);
-                    using (var stream = new FileStream(filePath, FileMode.Create))
+                    using (var stream = new FileStream(filePath, FileMode.CreateNew))
                     {
                         await file.CopyToAsync(stream);
                     }
@@ -121,6 +153,48 @@ namespace Server.Endpoints
                     return Results.Problem(ex.Message);
                 }
             });
+        }
+
+        internal static string? CreateSafeStoredFileName(string submittedFileName)
+        {
+            string originalName = Path.GetFileName(submittedFileName);
+            if (string.IsNullOrWhiteSpace(originalName))
+            {
+                return null;
+            }
+
+            var invalidChars = Path.GetInvalidFileNameChars();
+            var safeChars = originalName
+                .Select(c => invalidChars.Contains(c) || char.IsControl(c) ? '_' : c)
+                .ToArray();
+
+            string cleanName = new string(safeChars).Trim().Trim('.');
+            if (string.IsNullOrWhiteSpace(cleanName))
+            {
+                return null;
+            }
+
+            string extension = Path.GetExtension(cleanName);
+            if (extension.Length > 16)
+            {
+                extension = extension.Substring(0, 16);
+            }
+
+            string nameWithoutExtension = Path.GetFileNameWithoutExtension(cleanName);
+            if (nameWithoutExtension.Length > 80)
+            {
+                nameWithoutExtension = nameWithoutExtension.Substring(0, 80);
+            }
+
+            string uniqueSuffix = Guid.NewGuid().ToString("N").Substring(0, 12);
+            return $"{nameWithoutExtension}_{uniqueSuffix}{extension}";
+        }
+
+        private static string EnsureTrailingSeparator(string path)
+        {
+            return path.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+                ? path
+                : path + Path.DirectorySeparatorChar;
         }
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using client;
 using Xunit;
 
@@ -53,6 +54,45 @@ namespace Tests
             Assert.Single(result);
             Assert.Equal("PC-STUDENT-02", result[0].Key);
             Assert.Equal("Sato Hanako", result[0].StudentName);
+        }
+
+        [Fact]
+        public void ParseCsv_QuotedCommaAndEscapedQuote_ParsesCorrectly()
+        {
+            var lines = new[]
+            {
+                "PC-STUDENT-01,\"Yamada, Taro\"",
+                "PC-STUDENT-02,\"Sato \"\"Hana\"\"\""
+            };
+
+            var result = StudentCsvProcessor.ParseCsv(lines);
+
+            Assert.Equal(2, result.Count);
+            Assert.Equal("Yamada, Taro", result[0].StudentName);
+            Assert.Equal("Sato \"Hana\"", result[1].StudentName);
+        }
+
+        [Fact]
+        public void DecodeText_Utf8WithoutBom_PreservesJapaneseText()
+        {
+            byte[] bytes = new UTF8Encoding(false).GetBytes("PC-01,山田太郎");
+
+            string text = StudentCsvProcessor.DecodeText(bytes, out string encodingName);
+
+            Assert.Equal("PC-01,山田太郎", text);
+            Assert.Equal("UTF-8", encodingName);
+        }
+
+        [Fact]
+        public void DecodeText_Cp932_PreservesJapaneseText()
+        {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            byte[] bytes = Encoding.GetEncoding(932).GetBytes("PC-01,山田太郎");
+
+            string text = StudentCsvProcessor.DecodeText(bytes, out string encodingName);
+
+            Assert.Equal("PC-01,山田太郎", text);
+            Assert.Equal("Shift-JIS (CP932)", encodingName);
         }
 
         [Theory]

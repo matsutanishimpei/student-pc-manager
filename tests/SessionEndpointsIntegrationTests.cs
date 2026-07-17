@@ -197,6 +197,15 @@ public class SessionEndpointsIntegrationTests : IClassFixture<TestWebAppFactory>
     }
 
     [Fact]
+    public async Task ExecEndpoint_TooLongCommand_ReturnsBadRequest()
+    {
+        var content = JsonContent.Create(new { Command = new string('a', 32769), RunInUserSession = false });
+        var response = await _client.PostAsync("/api/exec", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
     public async Task ExecEndpoint_ValidCommand_ReturnsOk()
     {
         _factory.MockExecutor.NextCommandResponse = new CommandResponse
@@ -331,11 +340,39 @@ public class SessionEndpointsIntegrationTests : IClassFixture<TestWebAppFactory>
         var result = await response.Content.ReadFromJsonAsync<UploadResponse>();
         Assert.NotNull(result);
         Assert.True(File.Exists(result!.FilePath));
-        Assert.Equal("test_file.txt", Path.GetFileName(result.FilePath));
+        Assert.Equal(Path.GetFullPath(_factory.TestUploadDir), Path.GetDirectoryName(result.FilePath));
+        Assert.StartsWith("test_file_", Path.GetFileName(result.FilePath));
+        Assert.Equal(".txt", Path.GetExtension(result.FilePath));
 
         // Content check
         string fileText = await File.ReadAllTextAsync(result.FilePath);
         Assert.Equal("fake file content", fileText);
+    }
+
+    [Fact]
+    public async Task UploadEndpoint_PathTraversalFileName_StaysInsideUploadDirectory()
+    {
+        var content = new MultipartFormDataContent();
+        var fileContent = new ByteArrayContent(Encoding.UTF8.GetBytes("fake file content"));
+        content.Add(fileContent, "file", "..\\evil.txt");
+
+        var response = await _client.PostAsync("/api/upload", content);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = await response.Content.ReadFromJsonAsync<UploadResponse>();
+        Assert.NotNull(result);
+        Assert.True(File.Exists(result!.FilePath));
+        Assert.Equal(Path.GetFullPath(_factory.TestUploadDir), Path.GetDirectoryName(result.FilePath));
+        Assert.StartsWith("evil_", Path.GetFileName(result.FilePath));
+        Assert.Equal(".txt", Path.GetExtension(result.FilePath));
+    }
+
+    [Fact]
+    public void CreateSafeStoredFileName_BlankName_ReturnsNull()
+    {
+        Assert.Null(SessionEndpoints.CreateSafeStoredFileName(""));
+        Assert.Null(SessionEndpoints.CreateSafeStoredFileName("   "));
     }
 
     // --- /api/mac ---
