@@ -12,7 +12,7 @@
 - 選択したプロセスの遠隔終了
 - PC名による一括登録、IP範囲スキャン、Wake on LAN
 - 学生名とPCのCSVインポート・エクスポート
-- HMAC-SHA256署名によるAPI認証
+- 本文ハッシュとワンタイムnonceを含むHMAC-SHA256署名によるAPI認証
 - UTF-8、UTF-16、CP932のCSV読み込みと、Excel向けCP932出力
 
 ## システム構成
@@ -28,7 +28,8 @@ student-pc-manager/
 │   ├── Middlewares/        # 署名認証
 │   ├── Services/           # 実行セッションと常駐処理
 │   ├── appsettings.json    # APIキー、保存先、上限値
-│   ├── install.bat
+│   ├── install-secure.ps1
+│   ├── configure-api-key.ps1
 │   └── uninstall.bat
 ├── helper/                 # ログインユーザー側の補助プロセス
 ├── client/                 # 教員PC用WPFアプリ
@@ -61,17 +62,25 @@ Windows上でリポジトリのルートから次を実行します。
 
 ### 生徒PCへ導入する
 
-1. `publish/server/` の `appsettings.json` を確認します。
-2. `ApiKey` を教室用の共有キーに設定します。
-3. `install.bat` を管理者として実行します。
-4. 教員PCで `publish/client/client.exe` を起動し、同じAPIキーを入力します。
-5. 代表PC1台で疎通確認してから対象を広げます。
+1. BitLocker To Goで暗号化した管理者用USBへ`publish/server/`一式と、共有キーだけを書いた`api-key.provision`を置きます。
+2. 各生徒PCでUSB内の`server\install-next-pc.cmd`をダブルクリックし、管理者確認を許可します。キーはPCへコピーされず、直ちにそのPC用のDPAPI暗号文として保存されます。
+3. 最終PCでは`server\install-last-pc.cmd`をダブルクリックし、USB上のキーファイルを自動削除します。
+4. 再インストールでは暗号化済み設定が保持されるため、通常はUSBキーが不要です。
+5. 教員PCで `publish/client/client.exe` を起動し、同じAPIキーを入力します。
+6. 代表PC1台で疎通確認してから対象を広げます。
+
+Active Directory、WinRM、証明書はこの標準導入手順では使用しません。詳しくは[`docs/Deployment_Runbook.md`](docs/Deployment_Runbook.md)を参照してください。
 
 詳細は[生徒PCへの導入手順](docs/Server_Manual.md)と[教員アプリ操作手順](docs/Client_Manual.md)を参照してください。
 
 ## セキュリティと制限
 
-- APIキーそのものは通信で送らず、時刻、HTTPメソッド、通信先を含むHMAC-SHA256署名を毎回送ります。
+- HTTPSは、証明書の発行・更新・失効管理が現在の運用要件に収まらないため、意図的に採用していません。HMACは要求を認証しますが通信を暗号化しないため、信頼済みの閉じた教室LANだけで使用してください。
+- 全生徒PCで1つの共有APIキーを使う設計を意図的に維持しています。1台またはUSBから漏えいした場合は、教員クライアントと全生徒PCのキー交換が必要です。
+- APIキーそのものは通信で送らず、時刻、nonce、HTTPメソッド、通信先、本文ハッシュ、アップロード元ファイル名ハッシュを含むHMAC-SHA256署名を毎回送ります。同一nonceの再利用は再起動後も拒否されます。
+- 生徒PCの共有APIキーはPC単位のDPAPIで暗号化され、設定・nonce履歴・サーバーログはAdministratorsとLocal Systemだけがアクセスできます。
+- APIキーは16文字以上が必須です。クライアント設定ではWindowsユーザー単位に暗号化して保存されます。
+- ユーザーセッション補助処理の名前付きパイプは、ログオンユーザーとLocal Systemだけに制限されます。
 - 教員PCと生徒PCの時刻差が5分を超える要求は拒否されます。Windowsの時刻同期を有効にしてください。
 - APIキーが未設定の生徒PCは、管理APIへの要求をすべて拒否します。
 - PowerShellコマンドは最大32,768文字です。
@@ -79,10 +88,12 @@ Windows上でリポジトリのルートから次を実行します。
 - 配布ファイル名はサーバー側で無害化し、一意な名前で保存します。保存先外へのパス指定は拒否します。
 - 通常のコマンドとインストーラーは強い権限で実行できます。対象PCとコマンドを確認してから実行してください。
 
+これらの設計判断、受け入れるリスク、必須の代替対策は[セキュリティ設計判断](docs/Security_Design_Decisions.md)に記録しています。
+
 ## 文字コード
 
 - C#、JSON、Markdownなどのテキストは`.editorconfig`によりUTF-8で統一します。
-- `install.bat`と`uninstall.bat`だけは、日本語版コマンドプロンプトとの互換性のためCP932を維持します。
+- `uninstall.bat`は、日本語版コマンドプロンプトとの互換性のためCP932を維持します。新規・再インストールには`install-secure.ps1`を使用します。
 - 名簿CSVの読み込みは、UTF-8 BOM付き、UTF-16 LE/BE、UTF-8、CP932を自動判定します。
 - 名簿CSVの出力は、Windows版Excelで直接開きやすいCP932です。
 - 設定、PC一覧、クライアント操作ログはUTF-8で保存します。
