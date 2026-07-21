@@ -46,10 +46,12 @@ namespace client
 
             try
             {
-                var request = new HttpRequestMessage(HttpMethod.Get, $"http://{_pcAddress}/api/processes");
-                request.AddApiSignature(_apiKey);
-
-                var response = await httpClient.SendAsync(request);
+                using var response = await httpClient.SendWithRetryAsync(async () =>
+                {
+                    var request = new HttpRequestMessage(HttpMethod.Get, $"http://{_pcAddress}/api/processes");
+                    await request.AddApiSignatureAsync(_apiKey);
+                    return request;
+                });
                 if (response.IsSuccessStatusCode)
                 {
                     var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
@@ -93,10 +95,12 @@ namespace client
 
             try
             {
-                var request = new HttpRequestMessage(HttpMethod.Get, $"http://{_pcAddress}/api/screenshot");
-                request.AddApiSignature(_apiKey);
-
-                var response = await httpClient.SendAsync(request);
+                using var response = await httpClient.SendWithRetryAsync(async () =>
+                {
+                    var request = new HttpRequestMessage(HttpMethod.Get, $"http://{_pcAddress}/api/screenshot");
+                    await request.AddApiSignatureAsync(_apiKey);
+                    return request;
+                });
                 if (response.IsSuccessStatusCode)
                 {
                     byte[] imageBytes = await response.Content.ReadAsByteArrayAsync();
@@ -190,14 +194,15 @@ namespace client
                 try
                 {
                     string command = $"Stop-Process -Id {pid} -Force";
-                    var reqObj = new CommandRequest { Command = command };
-                    var request = new HttpRequestMessage(HttpMethod.Post, $"http://{_pcAddress}/api/exec")
+                    using var response = await httpClient.SendWithRetryAsync(async () =>
                     {
-                        Content = JsonContent.Create(reqObj)
-                    };
-                    request.AddApiSignature(_apiKey);
-
-                    var response = await httpClient.SendAsync(request);
+                        var request = new HttpRequestMessage(HttpMethod.Post, $"http://{_pcAddress}/api/exec")
+                        {
+                            Content = JsonContent.Create(new CommandRequest { Command = command })
+                        };
+                        await request.AddApiSignatureAsync(_apiKey);
+                        return request;
+                    });
                     if (response.IsSuccessStatusCode)
                     {
                         var cmdResult = await response.Content.ReadFromJsonAsync<CommandResponse>();

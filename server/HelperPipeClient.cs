@@ -4,13 +4,14 @@ using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
+using System.Threading;
 
 public static class HelperPipeClient
 {
     [DllImport("kernel32.dll")]
     private static extern uint WTSGetActiveConsoleSessionId();
 
-    public static async Task<byte[]?> SendCommandAsync(string command, int timeoutMs = 500)
+    public static async Task<byte[]?> SendCommandAsync(string command, int timeoutMs = 500, CancellationToken cancellationToken = default)
     {
         uint sessionId = WTSGetActiveConsoleSessionId();
         if (sessionId == 0xFFFFFFFF)
@@ -25,19 +26,21 @@ public static class HelperPipeClient
             using (var pipeClient = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous))
             {
                 // Connect with a short timeout to fail fast if helper is not running
-                await pipeClient.ConnectAsync(timeoutMs);
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeoutCts.CancelAfter(timeoutMs);
+                await pipeClient.ConnectAsync(timeoutCts.Token);
 
                 // Write command followed by a newline
                 byte[] commandBytes = Encoding.UTF8.GetBytes(command + "\n");
-                await pipeClient.WriteAsync(commandBytes, 0, commandBytes.Length);
-                await pipeClient.FlushAsync();
+                await pipeClient.WriteAsync(commandBytes, cancellationToken);
+                await pipeClient.FlushAsync(cancellationToken);
 
                 // Read response length (4 bytes)
                 byte[] lengthBuffer = new byte[4];
                 int bytesRead = 0;
                 while (bytesRead < 4)
                 {
-                    int read = await pipeClient.ReadAsync(lengthBuffer, bytesRead, 4 - bytesRead);
+                    int read = await pipeClient.ReadAsync(lengthBuffer.AsMemory(bytesRead, 4 - bytesRead), cancellationToken);
                     if (read <= 0) return null; // Stream closed
                     bytesRead += read;
                 }
@@ -53,13 +56,17 @@ public static class HelperPipeClient
                 bytesRead = 0;
                 while (bytesRead < length)
                 {
-                    int read = await pipeClient.ReadAsync(dataBuffer, bytesRead, length - bytesRead);
+                    int read = await pipeClient.ReadAsync(dataBuffer.AsMemory(bytesRead, length - bytesRead), cancellationToken);
                     if (read <= 0) return null; // Stream closed
                     bytesRead += read;
                 }
 
                 return dataBuffer;
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception)
         {

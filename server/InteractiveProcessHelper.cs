@@ -1,5 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Diagnostics;
 
 /// <summary>
 /// Windows Service (Session 0) からアクティブなユーザーセッションの
@@ -44,6 +46,9 @@ public static class InteractiveProcessHelper
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateProcess(IntPtr hProcess, uint uExitCode);
+
     // --- 構造体 ---
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -73,6 +78,9 @@ public static class InteractiveProcessHelper
     private const int TokenPrimary = 1;
     private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
     private const uint CREATE_NO_WINDOW = 0x08000000;
+    private const uint WAIT_OBJECT_0 = 0x00000000;
+    private const uint WAIT_TIMEOUT = 0x00000102;
+    private const uint WAIT_FAILED = 0xFFFFFFFF;
 
     /// <summary>
     /// アクティブなコンソールセッションの対話型デスクトップ (winsta0\default) 上で
@@ -82,7 +90,7 @@ public static class InteractiveProcessHelper
     /// <param name="timeoutMs">タイムアウト（ミリ秒）。デフォルト15秒。</param>
     /// <param name="wait">プロセスの完了を待機するかどうか。デフォルトは true。</param>
     /// <returns>成功可否とエラーメッセージのタプル</returns>
-    public static (bool Success, string Error) RunInUserSession(string commandLine, uint timeoutMs = 15000, bool wait = true)
+    public static (bool Success, string Error) RunInUserSession(string commandLine, uint timeoutMs = 15000, bool wait = true, CancellationToken cancellationToken = default)
     {
         IntPtr userToken = IntPtr.Zero;
         IntPtr dupToken = IntPtr.Zero;
@@ -123,7 +131,45 @@ public static class InteractiveProcessHelper
             // 7. プロセスの完了を待機
             if (wait)
             {
-                WaitForSingleObject(pi.hProcess, timeoutMs);
+                var stopwatch = Stopwatch.StartNew();
+                uint waitResult;
+                do
+                {
+                    if (cancellationToken.IsCancellationRequested || stopwatch.ElapsedMilliseconds >= timeoutMs)
+                    {
+                        TerminateProcess(pi.hProcess, 1);
+                        WaitForSingleObject(pi.hProcess, 2000);
+                        CloseHandle(pi.hThread);
+                        CloseHandle(pi.hProcess);
+                        return (false, cancellationToken.IsCancellationRequested
+                            ? "Process cancelled because the client disconnected"
+                            : $"Process timed out after {timeoutMs} ms");
+                    }
+                    waitResult = WaitForSingleObject(pi.hProcess, 100);
+                }
+                while (waitResult == WAIT_TIMEOUT);
+
+                if (waitResult == WAIT_TIMEOUT)
+                {
+                    CloseHandle(pi.hThread);
+                    CloseHandle(pi.hProcess);
+                    return (false, $"Process timed out after {timeoutMs} ms");
+                }
+
+                if (waitResult == WAIT_FAILED)
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    CloseHandle(pi.hThread);
+                    CloseHandle(pi.hProcess);
+                    return (false, $"WaitForSingleObject failed: Win32Error={error}");
+                }
+
+                if (waitResult != WAIT_OBJECT_0)
+                {
+                    CloseHandle(pi.hThread);
+                    CloseHandle(pi.hProcess);
+                    return (false, $"WaitForSingleObject returned unexpected status: 0x{waitResult:X8}");
+                }
             }
 
             // 8. ハンドルをクリーンアップ

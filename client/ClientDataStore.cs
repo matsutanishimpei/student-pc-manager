@@ -4,6 +4,8 @@ using System.IO;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Security.Cryptography;
+using Share.Security;
 
 namespace client
 {
@@ -49,13 +51,30 @@ namespace client
             }
 
             string json = File.ReadAllText(_configPath, Encoding.UTF8);
-            return JsonSerializer.Deserialize<ClientConfig>(json);
+            var persisted = JsonSerializer.Deserialize<PersistedClientConfig>(json);
+            if (persisted == null) return null;
+
+            if (!string.IsNullOrEmpty(persisted.ProtectedApiKey))
+            {
+                byte[] encrypted = Convert.FromBase64String(persisted.ProtectedApiKey);
+                byte[] clear = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
+                return new ClientConfig { ApiKey = Encoding.UTF8.GetString(clear) };
+            }
+
+            var migrated = new ClientConfig { ApiKey = persisted.ApiKey ?? string.Empty };
+            SaveConfig(migrated);
+            return migrated;
         }
 
         public void SaveConfig(ClientConfig config)
         {
             ArgumentNullException.ThrowIfNull(config);
-            WriteJson(_configPath, config);
+            byte[] clear = Encoding.UTF8.GetBytes(config.ApiKey);
+            byte[] encrypted = ProtectedData.Protect(clear, null, DataProtectionScope.CurrentUser);
+            WriteJson(_configPath, new PersistedClientConfig
+            {
+                ProtectedApiKey = Convert.ToBase64String(encrypted)
+            });
         }
 
         private static void WriteJson<T>(string path, T value)
@@ -64,6 +83,16 @@ namespace client
             string temporaryPath = path + ".tmp";
             File.WriteAllText(temporaryPath, json, new UTF8Encoding(false));
             File.Move(temporaryPath, path, true);
+            if (Path.GetFileName(path).Equals("config.json", StringComparison.OrdinalIgnoreCase))
+            {
+                WindowsFileSecurity.RestrictToAdministratorsAndSystem(path, includeCurrentUser: true);
+            }
+        }
+
+        private sealed class PersistedClientConfig
+        {
+            public string? ApiKey { get; set; }
+            public string? ProtectedApiKey { get; set; }
         }
     }
 }

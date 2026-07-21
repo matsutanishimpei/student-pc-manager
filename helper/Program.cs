@@ -9,6 +9,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Security.AccessControl;
+using System.Security.Principal;
 
 namespace sendCMD_helper
 {
@@ -36,12 +38,26 @@ namespace sendCMD_helper
                 try
                 {
                     // Create named pipe server
-                    using (var pipeServer = new NamedPipeServerStream(
+                    var pipeSecurity = new PipeSecurity();
+                    SecurityIdentifier? currentUser = WindowsIdentity.GetCurrent().User;
+                    if (currentUser != null)
+                    {
+                        pipeSecurity.AddAccessRule(new PipeAccessRule(currentUser, PipeAccessRights.FullControl, AccessControlType.Allow));
+                    }
+                    pipeSecurity.AddAccessRule(new PipeAccessRule(
+                        new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                        PipeAccessRights.FullControl,
+                        AccessControlType.Allow));
+
+                    using (var pipeServer = NamedPipeServerStreamAcl.Create(
                         pipeName,
                         PipeDirection.InOut,
                         1,
                         PipeTransmissionMode.Byte,
-                        PipeOptions.Asynchronous))
+                        PipeOptions.Asynchronous,
+                        0,
+                        0,
+                        pipeSecurity))
                     {
                         // Wait for a client connection
                         await pipeServer.WaitForConnectionAsync();

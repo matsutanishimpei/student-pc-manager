@@ -4,7 +4,9 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
+using System.Security.Cryptography;
 using Microsoft.Extensions.Configuration;
 using Share.Models;
 
@@ -14,12 +16,15 @@ namespace Server.Services
     {
         private readonly IConfiguration _configuration;
         private readonly HashSet<string> _excludeProcesses;
+        private readonly TimeSpan _commandTimeout;
 
         public AdaptiveSessionExecutor(IConfiguration configuration)
         {
             _configuration = configuration;
             var excludeList = _configuration.GetSection("ExcludeProcesses").Get<string[]>() ?? Array.Empty<string>();
             _excludeProcesses = new HashSet<string>(excludeList, StringComparer.OrdinalIgnoreCase);
+            int timeoutSeconds = Math.Max(1, _configuration.GetValue<int?>("CommandTimeoutSeconds") ?? 600);
+            _commandTimeout = TimeSpan.FromSeconds(timeoutSeconds);
         }
 
         private const string ScreenshotPsCommand =
@@ -38,10 +43,10 @@ namespace Server.Services
         private const string ProcessesPsCommand =
             "$p = Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object ProcessName, Id, MainWindowTitle; if ($p) { ConvertTo-Json @($p) -Compress } else { '[]' }";
 
-        public async Task<byte[]?> GetScreenshotAsync()
+        public async Task<byte[]?> GetScreenshotAsync(CancellationToken cancellationToken = default)
         {
             // 1. Try Helper Process via Named Pipe
-            byte[]? data = await HelperPipeClient.SendCommandAsync("screenshot", timeoutMs: 500);
+            byte[]? data = await HelperPipeClient.SendCommandAsync("screenshot", timeoutMs: 500, cancellationToken);
             if (data != null && data.Length > 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF)
             {
                 return data;
@@ -55,12 +60,12 @@ namespace Server.Services
 
             // 2. Fallback to PowerShell
             Log.Write("[Fallback] Screenshot requested via PowerShell fallback");
-            return await ExecutePowerShellInUserSessionAsync(ScreenshotPsCommand, "jpg");
+            return await ExecutePowerShellInUserSessionAsync(ScreenshotPsCommand, "jpg", cancellationToken);
         }
 
-        public async Task<string> GetActiveAppAsync()
+        public async Task<string> GetActiveAppAsync(CancellationToken cancellationToken = default)
         {
-            string processesJson = await GetProcessesJsonAsync();
+            string processesJson = await GetProcessesJsonAsync(cancellationToken);
             try
             {
                 var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
@@ -81,10 +86,10 @@ namespace Server.Services
             }
         }
 
-        public async Task<string> GetProcessesJsonAsync()
+        public async Task<string> GetProcessesJsonAsync(CancellationToken cancellationToken = default)
         {
             // 1. Try Helper Process via Named Pipe
-            byte[]? data = await HelperPipeClient.SendCommandAsync("processes", timeoutMs: 500);
+            byte[]? data = await HelperPipeClient.SendCommandAsync("processes", timeoutMs: 500, cancellationToken);
             string json;
             if (data != null)
             {
@@ -94,7 +99,7 @@ namespace Server.Services
             {
                 // 2. Fallback to PowerShell
                 Log.Write("[Fallback] Processes requested via PowerShell fallback");
-                byte[]? psData = await ExecutePowerShellInUserSessionAsync(ProcessesPsCommand, "txt");
+                byte[]? psData = await ExecutePowerShellInUserSessionAsync(ProcessesPsCommand, "txt", cancellationToken);
                 json = psData != null ? Encoding.UTF8.GetString(psData).Trim() : "[]";
             }
 
@@ -134,12 +139,12 @@ namespace Server.Services
             public string MainWindowTitle { get; set; } = string.Empty;
         }
 
-        public async Task<CommandResponse> ExecuteCommandAsync(string command, bool runInUserSession)
+        public async Task<CommandResponse> ExecuteCommandAsync(string command, bool runInUserSession, CancellationToken cancellationToken = default)
         {
-            Log.Write($"[Command Execution] RunInUserSession: {runInUserSession}, Command: {command}");
+            Log.Write(CreateCommandAuditEntry(command, runInUserSession));
             if (runInUserSession)
             {
-                byte[]? bytes = await ExecutePowerShellInUserSessionAsync(command, "txt");
+                byte[]? bytes = await ExecutePowerShellInUserSessionAsync(command, "txt", cancellationToken);
                 if (bytes == null)
                 {
                     return new CommandResponse
@@ -157,13 +162,19 @@ namespace Server.Services
             }
             else
             {
-                return ExecutePowerShell(command);
+                return await ExecutePowerShellAsync(command, _commandTimeout, cancellationToken);
             }
+        }
+
+        internal static string CreateCommandAuditEntry(string command, bool runInUserSession)
+        {
+            string fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(command))).Substring(0, 12).ToLowerInvariant();
+            return $"[Command Execution] RunInUserSession: {runInUserSession}, Length: {command.Length}, Fingerprint: {fingerprint}";
         }
 
         // --- PowerShell Execution Helpers ---
 
-        private static CommandResponse ExecutePowerShell(string command)
+        internal static async Task<CommandResponse> ExecutePowerShellAsync(string command, TimeSpan timeout, CancellationToken cancellationToken = default)
         {
             var result = new CommandResponse();
             try
@@ -193,14 +204,43 @@ namespace Server.Services
                     }
                 }
 
-                string stdout = process.StandardOutput.ReadToEnd();
-                string stderr = process.StandardError.ReadToEnd();
+                Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+                Task<string> stderrTask = process.StandardError.ReadToEndAsync();
 
-                process.WaitForExit();
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeoutCts.CancelAfter(timeout);
+                try
+                {
+                    await process.WaitForExitAsync(timeoutCts.Token);
+                }
+                catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+                {
+                    bool processStopped = false;
+                    try
+                    {
+                        process.Kill(entireProcessTree: true);
+                        await process.WaitForExitAsync();
+                        processStopped = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Write($"[Command Timeout Cleanup Error] {ex.Message}");
+                    }
+
+                    result.ExitCode = -1;
+                    result.Stdout = processStopped ? await stdoutTask : string.Empty;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    result.Stderr = $"Command timed out after {timeout.TotalSeconds:0} seconds.";
+                    return result;
+                }
 
                 result.ExitCode = process.ExitCode;
-                result.Stdout = stdout;
-                result.Stderr = stderr;
+                result.Stdout = await stdoutTask;
+                result.Stderr = await stderrTask;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -210,7 +250,7 @@ namespace Server.Services
             return result;
         }
 
-        private static async Task<byte[]?> ExecutePowerShellInUserSessionAsync(string psCommand, string fileExtension)
+        private async Task<byte[]?> ExecutePowerShellInUserSessionAsync(string psCommand, string fileExtension, CancellationToken cancellationToken)
         {
             int sessionId = 0;
             try
@@ -234,7 +274,7 @@ namespace Server.Services
                         directScript = $"$r = $({psCommand}); Out-File -FilePath '{tempOutFile}' -InputObject $r -Encoding utf8";
                     }
 
-                    var resp = ExecutePowerShell(directScript);
+                    var resp = await ExecutePowerShellAsync(directScript, _commandTimeout, cancellationToken);
                     if (resp.ExitCode == 0 && File.Exists(tempOutFile))
                     {
                         byte[] bytes = await File.ReadAllBytesAsync(tempOutFile);
@@ -243,9 +283,13 @@ namespace Server.Services
                     }
                     else
                     {
-                        Log.Write($"[Direct Execution Error] ExitCode: {resp.ExitCode}, Stderr: {resp.Stderr}");
+                        Log.Write($"[Direct Execution Error] ExitCode: {resp.ExitCode}, StderrLength: {resp.Stderr?.Length ?? 0}");
                         return null;
                     }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -270,10 +314,11 @@ namespace Server.Services
 
             try
             {
-                await File.WriteAllTextAsync(scriptFile, fullScriptContent, Encoding.UTF8);
+                await File.WriteAllTextAsync(scriptFile, fullScriptContent, Encoding.UTF8, cancellationToken);
 
                 string cmdLine = $"powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{scriptFile}\"";
-                var (success, error) = InteractiveProcessHelper.RunInUserSession(cmdLine, 15000);
+                var (success, error) = InteractiveProcessHelper.RunInUserSession(cmdLine, (uint)_commandTimeout.TotalMilliseconds, cancellationToken: cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
 
                 try { File.Delete(scriptFile); } catch {}
 
@@ -289,9 +334,15 @@ namespace Server.Services
                     return null;
                 }
 
-                byte[] resultBytes = await File.ReadAllBytesAsync(outputFile);
+                byte[] resultBytes = await File.ReadAllBytesAsync(outputFile, cancellationToken);
                 try { File.Delete(outputFile); } catch {}
                 return resultBytes;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                try { File.Delete(scriptFile); } catch {}
+                try { File.Delete(outputFile); } catch {}
+                throw;
             }
             catch (Exception ex)
             {

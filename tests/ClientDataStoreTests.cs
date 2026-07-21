@@ -56,6 +56,23 @@ namespace Tests
             store.SaveConfig(new ClientConfig { ApiKey = "classroom-key" });
 
             Assert.Equal("classroom-key", store.LoadConfig()!.ApiKey);
+            string persisted = File.ReadAllText(Path.Combine(_directory, "config.json"), Encoding.UTF8);
+            Assert.DoesNotContain("classroom-key", persisted);
+            Assert.Contains("ProtectedApiKey", persisted);
+        }
+
+        [Fact]
+        public void Config_LegacyPlaintext_IsMigratedToProtectedValue()
+        {
+            Directory.CreateDirectory(_directory);
+            File.WriteAllText(Path.Combine(_directory, "config.json"), "{\"ApiKey\":\"legacy-classroom-key\"}", Encoding.UTF8);
+            var store = new ClientDataStore(_directory);
+
+            Assert.Equal("legacy-classroom-key", store.LoadConfig()!.ApiKey);
+
+            string migrated = File.ReadAllText(Path.Combine(_directory, "config.json"), Encoding.UTF8);
+            Assert.DoesNotContain("legacy-classroom-key", migrated);
+            Assert.Contains("ProtectedApiKey", migrated);
         }
 
         public void Dispose()

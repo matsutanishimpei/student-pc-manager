@@ -1,7 +1,10 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Server.Middlewares;
+using Server;
 using Share.Security;
+using System.IO;
+using System.Text;
 using Xunit;
 
 namespace Tests;
@@ -23,13 +26,15 @@ public class ApiKeyAuthMiddlewareTests
 
     // Helper to run middleware and check results
     private static async Task<(int statusCode, bool nextCalled)> RunMiddleware(
-        string? configApiKey, string requestPath, string method, string? headerTimestamp, string? headerSignature)
+        string? configApiKey, string requestPath, string method, string? headerTimestamp, string? headerSignature,
+        string? headerNonce = null, string? headerContentHash = null, string? headerFileNameHash = null)
     {
         var state = new TestState();
         var config = BuildConfig(configApiKey);
         var middleware = new ApiKeyAuthMiddleware(
             next: _ => { state.NextCalled = true; return Task.CompletedTask; },
-            configuration: config);
+            apiKeyProvider: new ServerApiKeyProvider(configApiKey ?? string.Empty),
+            nonceStore: new ApiNonceStore());
 
         var context = new DefaultHttpContext();
         context.Request.Path = requestPath;
@@ -39,6 +44,12 @@ public class ApiKeyAuthMiddlewareTests
             context.Request.Headers["X-API-TIMESTAMP"] = headerTimestamp;
         if (headerSignature != null)
             context.Request.Headers["X-API-SIGNATURE"] = headerSignature;
+        if (headerNonce != null)
+            context.Request.Headers["X-API-NONCE"] = headerNonce;
+        if (headerContentHash != null)
+            context.Request.Headers["X-API-CONTENT-SHA256"] = headerContentHash;
+        if (headerFileNameHash != null)
+            context.Request.Headers["X-API-FILENAME-SHA256"] = headerFileNameHash;
 
         await middleware.InvokeAsync(context);
         return (context.Response.StatusCode, state.NextCalled);
@@ -48,8 +59,10 @@ public class ApiKeyAuthMiddlewareTests
         string? configApiKey, string requestPath, string method, string apiKeyToSign, long timeOffsetSeconds = 0)
     {
         string timestamp = (DateTimeOffset.UtcNow.ToUnixTimeSeconds() + timeOffsetSeconds).ToString();
-        string signature = ApiSignature.Generate(apiKeyToSign, timestamp, method, requestPath);
-        return await RunMiddleware(configApiKey, requestPath, method, timestamp, signature);
+        string nonce = Guid.NewGuid().ToString("N");
+        string contentHash = ApiSignature.EmptyContentHash;
+        string signature = ApiSignature.Generate(apiKeyToSign, timestamp, nonce, method, requestPath, contentHash);
+        return await RunMiddleware(configApiKey, requestPath, method, timestamp, signature, nonce, contentHash, ApiSignature.EmptyContentHash);
     }
 
     private class TestState { public bool NextCalled { get; set; } }
@@ -81,7 +94,7 @@ public class ApiKeyAuthMiddlewareTests
     {
         string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
         var (statusCode, nextCalled) = await RunMiddleware(
-            ValidApiKey, "/api/exec", "POST", timestamp, "invalid-signature-value-here");
+            ValidApiKey, "/api/exec", "POST", timestamp, "invalid-signature-value-here", Guid.NewGuid().ToString("N"), ApiSignature.EmptyContentHash, ApiSignature.EmptyContentHash);
 
         Assert.False(nextCalled);
         Assert.Equal(401, statusCode);
@@ -195,11 +208,12 @@ public class ApiKeyAuthMiddlewareTests
     {
         // /api/exec のパスで署名を作成
         string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
-        string signature = ApiSignature.Generate(ValidApiKey, timestamp, "POST", "/api/exec");
+        string nonce = Guid.NewGuid().ToString("N");
+        string signature = ApiSignature.Generate(ValidApiKey, timestamp, nonce, "POST", "/api/exec", ApiSignature.EmptyContentHash);
 
         // しかしリクエスト自体は別のエンドポイント (/api/info) に対して送信された場合、改ざんとみなされるべき
         var (statusCode, nextCalled) = await RunMiddleware(
-            ValidApiKey, "/api/info", "POST", timestamp, signature);
+            ValidApiKey, "/api/info", "POST", timestamp, signature, nonce, ApiSignature.EmptyContentHash, ApiSignature.EmptyContentHash);
 
         Assert.False(nextCalled, "Should reject signature if the request path has been tampered with");
         Assert.Equal(401, statusCode);
@@ -210,13 +224,74 @@ public class ApiKeyAuthMiddlewareTests
     {
         // GET で署名を作成
         string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
-        string signature = ApiSignature.Generate(ValidApiKey, timestamp, "GET", "/api/exec");
+        string nonce = Guid.NewGuid().ToString("N");
+        string signature = ApiSignature.Generate(ValidApiKey, timestamp, nonce, "GET", "/api/exec", ApiSignature.EmptyContentHash);
 
         // POST でリクエストが送信された場合
         var (statusCode, nextCalled) = await RunMiddleware(
-            ValidApiKey, "/api/exec", "POST", timestamp, signature);
+            ValidApiKey, "/api/exec", "POST", timestamp, signature, nonce, ApiSignature.EmptyContentHash, ApiSignature.EmptyContentHash);
 
         Assert.False(nextCalled, "Should reject signature if the request HTTP method has been tampered with");
         Assert.Equal(401, statusCode);
+    }
+
+    [Fact]
+    public async Task ReusedNonce_Returns401OnSecondRequest()
+    {
+        var nonceStore = new ApiNonceStore();
+        int nextCalls = 0;
+        var middleware = new ApiKeyAuthMiddleware(
+            _ => { nextCalls++; return Task.CompletedTask; },
+            new ServerApiKeyProvider(ValidApiKey),
+            nonceStore);
+        string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        string nonce = Guid.NewGuid().ToString("N");
+        string signature = ApiSignature.Generate(ValidApiKey, timestamp, nonce, "GET", "/api/info", ApiSignature.EmptyContentHash);
+
+        async Task<DefaultHttpContext> InvokeAsync()
+        {
+            var context = new DefaultHttpContext();
+            context.Request.Method = "GET";
+            context.Request.Path = "/api/info";
+            context.Request.Headers["X-API-TIMESTAMP"] = timestamp;
+            context.Request.Headers["X-API-NONCE"] = nonce;
+            context.Request.Headers["X-API-CONTENT-SHA256"] = ApiSignature.EmptyContentHash;
+            context.Request.Headers["X-API-FILENAME-SHA256"] = ApiSignature.EmptyContentHash;
+            context.Request.Headers["X-API-SIGNATURE"] = signature;
+            await middleware.InvokeAsync(context);
+            return context;
+        }
+
+        Assert.Equal(200, (await InvokeAsync()).Response.StatusCode);
+        Assert.Equal(401, (await InvokeAsync()).Response.StatusCode);
+        Assert.Equal(1, nextCalls);
+    }
+
+    [Fact]
+    public async Task TamperedJsonBody_Returns401()
+    {
+        bool nextCalled = false;
+        var middleware = new ApiKeyAuthMiddleware(
+            _ => { nextCalled = true; return Task.CompletedTask; },
+            new ServerApiKeyProvider(ValidApiKey),
+            new ApiNonceStore());
+        string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        string nonce = Guid.NewGuid().ToString("N");
+        string signature = ApiSignature.Generate(ValidApiKey, timestamp, nonce, "POST", "/api/exec", ApiSignature.EmptyContentHash);
+        var context = new DefaultHttpContext();
+        context.Request.Method = "POST";
+        context.Request.Path = "/api/exec";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("{\"command\":\"tampered\"}"));
+        context.Request.ContentLength = context.Request.Body.Length;
+        context.Request.Headers["X-API-TIMESTAMP"] = timestamp;
+        context.Request.Headers["X-API-NONCE"] = nonce;
+        context.Request.Headers["X-API-CONTENT-SHA256"] = ApiSignature.EmptyContentHash;
+        context.Request.Headers["X-API-FILENAME-SHA256"] = ApiSignature.EmptyContentHash;
+        context.Request.Headers["X-API-SIGNATURE"] = signature;
+
+        await middleware.InvokeAsync(context);
+
+        Assert.Equal(401, context.Response.StatusCode);
+        Assert.False(nextCalled);
     }
 }

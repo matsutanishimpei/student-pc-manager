@@ -23,7 +23,7 @@ namespace Tests
             var client = new HttpClient(handler);
             var remoteClient = new RemotePcClient(client, client);
 
-            string machineName = await remoteClient.GetMachineNameAsync("192.168.1.20:6000", "secret");
+            string machineName = await remoteClient.GetMachineNameAsync("192.168.1.20:6000", "test-secret-key-123");
 
             Assert.Equal("PC-01", machineName);
             Assert.Equal("http://192.168.1.20:5000/api/info", capturedRequest!.RequestUri!.ToString());
@@ -42,10 +42,30 @@ namespace Tests
             var remoteClient = new RemotePcClient(client, client);
 
             var exception = await Assert.ThrowsAsync<RemotePcException>(() =>
-                remoteClient.ExecuteCommandAsync("localhost:5000", "secret", "bad", true));
+                remoteClient.ExecuteCommandAsync("localhost:5000", "test-secret-key-123", "bad", true));
 
             Assert.Equal(HttpStatusCode.BadRequest, exception.StatusCode);
             Assert.Contains("invalid command", exception.Message);
+        }
+
+        [Fact]
+        public async Task GetMachineNameAsync_Retries429Response()
+        {
+            int attempts = 0;
+            var handler = new StubHttpMessageHandler(_ =>
+            {
+                attempts++;
+                return attempts < 3
+                    ? new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                    : JsonResponse("{\"machineName\":\"PC-02\"}");
+            });
+            var client = new HttpClient(handler);
+            var remoteClient = new RemotePcClient(client, client);
+
+            string result = await remoteClient.GetMachineNameAsync("localhost:5000", "test-secret-key-123");
+
+            Assert.Equal("PC-02", result);
+            Assert.Equal(3, attempts);
         }
 
         private static HttpResponseMessage JsonResponse(string json)

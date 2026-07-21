@@ -28,7 +28,7 @@ public class MockTaskExecutor : IInteractiveTaskExecutor
     public string NextProcessesJson { get; set; } = "[]";
     public string NextActiveApp { get; set; } = "";
 
-    public Task<CommandResponse> ExecuteCommandAsync(string command, bool runInUserSession)
+    public Task<CommandResponse> ExecuteCommandAsync(string command, bool runInUserSession, CancellationToken cancellationToken = default)
     {
         return Task.FromResult(NextCommandResponse ?? new CommandResponse
         {
@@ -37,17 +37,17 @@ public class MockTaskExecutor : IInteractiveTaskExecutor
         });
     }
 
-    public Task<byte[]?> GetScreenshotAsync()
+    public Task<byte[]?> GetScreenshotAsync(CancellationToken cancellationToken = default)
     {
         return Task.FromResult(NextScreenshotBytes);
     }
 
-    public Task<string> GetProcessesJsonAsync()
+    public Task<string> GetProcessesJsonAsync(CancellationToken cancellationToken = default)
     {
         return Task.FromResult(NextProcessesJson);
     }
 
-    public Task<string> GetActiveAppAsync()
+    public Task<string> GetActiveAppAsync(CancellationToken cancellationToken = default)
     {
         return Task.FromResult(NextActiveApp);
     }
@@ -112,17 +112,44 @@ public class ApiSignatureHandler : DelegatingHandler
         _apiKey = apiKey;
     }
 
-    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, System.Threading.CancellationToken cancellationToken)
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, System.Threading.CancellationToken cancellationToken)
     {
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        var nonce = Guid.NewGuid().ToString("N");
         var method = request.Method.Method;
         var path = request.RequestUri?.LocalPath ?? "/";
+        string contentHash = Share.Security.ApiSignature.EmptyContentHash;
+        string fileNameHash = Share.Security.ApiSignature.EmptyContentHash;
+        if (request.Content != null)
+        {
+            if (path == "/api/upload" && request.Content is MultipartFormDataContent multipart)
+            {
+                var fileContent = multipart.FirstOrDefault(c => c.Headers.ContentDisposition?.Name == "file");
+                if (fileContent != null)
+                {
+                    await using var fileStream = await fileContent.ReadAsStreamAsync(cancellationToken);
+                    contentHash = await Share.Security.ApiSignature.ComputeHashAsync(fileStream, cancellationToken);
+                    string fileName = fileContent.Headers.ContentDisposition?.FileName?.Trim('"') ?? string.Empty;
+                    fileNameHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(fileName))).ToLowerInvariant();
+                }
+            }
+            else
+            {
+                await using var stream = new MemoryStream();
+                await request.Content.CopyToAsync(stream, cancellationToken);
+                stream.Position = 0;
+                contentHash = await Share.Security.ApiSignature.ComputeHashAsync(stream, cancellationToken);
+            }
+        }
 
-        var signature = Share.Security.ApiSignature.Generate(_apiKey, timestamp, method, path);
+        var signature = Share.Security.ApiSignature.Generate(_apiKey, timestamp, nonce, method, path, contentHash, fileNameHash);
         request.Headers.Add("X-API-TIMESTAMP", timestamp);
+        request.Headers.Add("X-API-NONCE", nonce);
+        request.Headers.Add("X-API-CONTENT-SHA256", contentHash);
+        request.Headers.Add("X-API-FILENAME-SHA256", fileNameHash);
         request.Headers.Add("X-API-SIGNATURE", signature);
 
-        return base.SendAsync(request, cancellationToken);
+        return await base.SendAsync(request, cancellationToken);
     }
 }
 
@@ -237,6 +264,8 @@ public class SessionEndpointsIntegrationTests : IClassFixture<TestWebAppFactory>
         var json = await response.Content.ReadFromJsonAsync<ServerInfoResponse>();
         Assert.NotNull(json);
         Assert.Equal(Environment.MachineName, json!.MachineName);
+        Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+        Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
     }
 
     // --- /api/screenshot ---
@@ -347,6 +376,7 @@ public class SessionEndpointsIntegrationTests : IClassFixture<TestWebAppFactory>
         // Content check
         string fileText = await File.ReadAllTextAsync(result.FilePath);
         Assert.Equal("fake file content", fileText);
+        Assert.Empty(Directory.GetFiles(_factory.TestUploadDir, "*.uploading"));
     }
 
     [Fact]
@@ -366,6 +396,32 @@ public class SessionEndpointsIntegrationTests : IClassFixture<TestWebAppFactory>
         Assert.Equal(Path.GetFullPath(_factory.TestUploadDir), Path.GetDirectoryName(result.FilePath));
         Assert.StartsWith("evil_", Path.GetFileName(result.FilePath));
         Assert.Equal(".txt", Path.GetExtension(result.FilePath));
+    }
+
+    [Fact]
+    public async Task UploadEndpoint_TamperedFileName_ReturnsUnauthorized()
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes("signed file content");
+        string contentHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+        string signedFileNameHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("signed.txt"))).ToLowerInvariant();
+        string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        string nonce = Guid.NewGuid().ToString("N");
+        string signature = Share.Security.ApiSignature.Generate(
+            _factory.TestApiKey, timestamp, nonce, "POST", "/api/upload", contentHash, signedFileNameHash);
+        using var content = new MultipartFormDataContent();
+        content.Add(new ByteArrayContent(bytes), "file", "tampered.txt");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/upload") { Content = content };
+        request.Headers.Add("X-API-TIMESTAMP", timestamp);
+        request.Headers.Add("X-API-NONCE", nonce);
+        request.Headers.Add("X-API-CONTENT-SHA256", contentHash);
+        request.Headers.Add("X-API-FILENAME-SHA256", signedFileNameHash);
+        request.Headers.Add("X-API-SIGNATURE", signature);
+        using var client = CreateUnauthenticatedClient();
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(Directory.GetFiles(_factory.TestUploadDir, "*.uploading"));
     }
 
     [Fact]

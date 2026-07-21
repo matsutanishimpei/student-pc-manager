@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text;
+using Share.Security;
 
 namespace client
 {
@@ -29,6 +30,7 @@ namespace client
                     _logPath,
                     $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}",
                     new UTF8Encoding(false));
+                WindowsFileSecurity.RestrictToAdministratorsAndSystem(_logPath, includeCurrentUser: true);
             }
         }
     }

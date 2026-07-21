@@ -6,6 +6,7 @@ using System.Net.Http.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Share.Models;
+using Share.Security;
 
 namespace client
 {
@@ -48,18 +49,24 @@ namespace client
             string localPath,
             CancellationToken cancellationToken = default)
         {
-            using var content = new MultipartFormDataContent();
-            await using var fileStream = File.OpenRead(localPath);
-            using var streamContent = new StreamContent(fileStream);
-            content.Add(streamContent, "file", Path.GetFileName(localPath));
-
-            using var request = new HttpRequestMessage(HttpMethod.Post, BuildUri(address, "/api/upload"))
+            string contentHash;
+            string fileNameHash;
+            await using (var hashStream = File.OpenRead(localPath))
             {
-                Content = content
-            };
-            request.AddApiSignature(apiKey);
+                contentHash = await ApiSignature.ComputeHashAsync(hashStream, cancellationToken);
+            }
+            fileNameHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(Path.GetFileName(localPath)))).ToLowerInvariant();
 
-            using HttpResponseMessage response = await _commandClient.SendAsync(request, cancellationToken);
+            using HttpResponseMessage response = await _commandClient.SendWithRetryAsync(() =>
+            {
+                var content = new MultipartFormDataContent();
+                var streamContent = new StreamContent(File.OpenRead(localPath));
+                content.Add(streamContent, "file", Path.GetFileName(localPath));
+                var request = new HttpRequestMessage(HttpMethod.Post, BuildUri(address, "/api/upload")) { Content = content };
+                request.AddApiSignature(apiKey, contentHash, fileNameHash);
+                return Task.FromResult(request);
+            }, cancellationToken);
             await EnsureSuccessAsync(response, cancellationToken);
             var result = await response.Content.ReadFromJsonAsync<UploadResult>(cancellationToken: cancellationToken);
             return result?.FilePath ?? string.Empty;
@@ -106,9 +113,12 @@ namespace client
             TRequest body,
             CancellationToken cancellationToken)
         {
-            using var request = new HttpRequestMessage(method, uri) { Content = JsonContent.Create(body) };
-            request.AddApiSignature(apiKey);
-            using HttpResponseMessage response = await client.SendAsync(request, cancellationToken);
+            using HttpResponseMessage response = await client.SendWithRetryAsync(async () =>
+            {
+                var request = new HttpRequestMessage(method, uri) { Content = JsonContent.Create(body) };
+                await request.AddApiSignatureAsync(apiKey, cancellationToken);
+                return request;
+            }, cancellationToken);
             await EnsureSuccessAsync(response, cancellationToken);
             return await ReadRequiredJsonAsync<TResponse>(response, cancellationToken);
         }
@@ -120,9 +130,12 @@ namespace client
             string apiKey,
             CancellationToken cancellationToken)
         {
-            using var request = new HttpRequestMessage(method, uri);
-            request.AddApiSignature(apiKey);
-            using HttpResponseMessage response = await client.SendAsync(request, cancellationToken);
+            using HttpResponseMessage response = await client.SendWithRetryAsync(async () =>
+            {
+                var request = new HttpRequestMessage(method, uri);
+                await request.AddApiSignatureAsync(apiKey, cancellationToken);
+                return request;
+            }, cancellationToken);
             await EnsureSuccessAsync(response, cancellationToken);
             return await ReadRequiredJsonAsync<TResponse>(response, cancellationToken);
         }

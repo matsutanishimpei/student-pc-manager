@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+    <PackageReference Include="System.IO.Pipes.AccessControl" Version="5.0.0" />
   </ItemGroup>
 
 </Project>
