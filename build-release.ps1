@@ -14,18 +14,13 @@ Write-Host "`n[1/3] Building Server (Student Service)..." -ForegroundColor Yello
 dotnet publish server/server.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=true -o "$PublishDir/server"
 
 if ($LASTEXITCODE -eq 0) {
-    Copy-Item "server/install.bat" "$PublishDir/server/" -Force
     Copy-Item "server/uninstall.bat" "$PublishDir/server/" -Force
+    Copy-Item "server/install-secure.ps1" "$PublishDir/server/" -Force
+    Copy-Item "server/configure-api-key.ps1" "$PublishDir/server/" -Force
+    Copy-Item "server/install-next-pc.cmd" "$PublishDir/server/" -Force
+    Copy-Item "server/install-last-pc.cmd" "$PublishDir/server/" -Force
     
-    # Inject default API key into release appsettings.json
-    $AppsettingsPath = Join-Path "$PublishDir/server" "appsettings.json"
-    if (Test-Path $AppsettingsPath) {
-        $json = Get-Content $AppsettingsPath -Raw | ConvertFrom-Json
-        $json.ApiKey = "5c3e7f41-0f73-455b-b9d9-482470724653"
-        $json | ConvertTo-Json -Depth 10 | Out-File $AppsettingsPath -Encoding utf8
-    }
-    
-    Write-Host "✓ Server build successful (API key injected): $PublishDir\server\server.exe" -ForegroundColor Green
+    Write-Host "✓ Server build successful: $PublishDir\server\server.exe" -ForegroundColor Green
 } else {
     Write-Error "Failed to build Server."
     exit $LASTEXITCODE
@@ -36,14 +31,7 @@ Write-Host "`n[2/3] Building Client (Teacher App)..." -ForegroundColor Yellow
 dotnet publish client/client.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=true -o "$PublishDir/client"
 
 if ($LASTEXITCODE -eq 0) {
-    # Generate initial config.json with default API key
-    $ConfigJson = @{
-        ApiKey = "5c3e7f41-0f73-455b-b9d9-482470724653"
-    } | ConvertTo-Json
-    $ConfigPath = Join-Path "$PublishDir/client" "config.json"
-    $ConfigJson | Out-File $ConfigPath -Encoding utf8
-
-    Write-Host "✓ Client build successful (Initial config generated): $PublishDir\client\client.exe" -ForegroundColor Green
+    Write-Host "✓ Client build successful: $PublishDir\client\client.exe" -ForegroundColor Green
 } else {
     Write-Error "Failed to build Client."
     exit $LASTEXITCODE
